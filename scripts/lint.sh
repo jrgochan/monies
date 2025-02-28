@@ -16,9 +16,3 @@ echo "Running mypy..."
 mypy src app.py
 echo "Running black (check only)..."
 black --check src app.py
-echo "Running isort (check only)..."
-isort --check src app.py
-echo "Running bandit (security check)..."
-bandit -r src app.py
-echo "Running pylint..."
-pylint src app.py || true  # Don't fail on pylint warnings

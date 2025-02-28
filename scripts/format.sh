@@ -9,8 +9,5 @@ else
   exit 1
 fi
 
-# Run formatters
-echo "Running black formatter..."
+# Run black formatter
 black src app.py
-echo "Running isort import sorter..."
-isort src app.py

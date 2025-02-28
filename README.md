@@ -44,6 +44,24 @@ cp .env.example .env
 # Edit .env with your API keys and configuration
 ```
 
+4. OAuth Configuration (Optional):
+```bash
+cp oauth.env.example .env
+# Or add OAuth variables to your existing .env file
+# Add your OAuth credentials for any of the supported providers:
+# - Google
+# - Facebook
+# - Twitter
+# - GitHub
+# - Microsoft
+# - Coinbase
+```
+
+5. Run the OAuth database migration:
+```bash
+./scripts/migrate_oauth.py
+```
+
 ## Running the Application
 
 1. Initialize the database (if not already done by the setup script):
@@ -69,6 +87,9 @@ streamlit run app.py
 - Register a new account or use the demo account:
   - Username: demo
   - Password: password123
+- Log in with multiple OAuth providers:
+  - Google, Facebook, Twitter, GitHub, Microsoft, and Coinbase
+- Connect your Coinbase account for seamless wallet integration
 
 ### Wallet Management
 
@@ -120,6 +141,8 @@ crypto-wallet-trend-analysis/
 - API keys are encrypted before storage
 - Passwords are hashed using bcrypt
 - JWT tokens for authentication
+- OAuth 2.0 for secure social login
+- Encrypted OAuth tokens for third-party API access
 - Secure HTTP-only cookies
 - Principle of least privilege for API permissions
 
