@@ -270,9 +270,50 @@ def show_etf_investing():
     
     if etf_ticker:
         try:
-            # Get ETF info
-            etf = yf.Ticker(etf_ticker)
-            info = etf.info
+            # Try to get ETF info with a retry mechanism and better error handling
+            try:
+                # First try - with standard ticker
+                etf = yf.Ticker(etf_ticker)
+                # Force a data request to check if it works
+                info = etf.info
+                
+                # Check if we got valid data back
+                if not info or len(info) < 5:  # Basic check for meaningful data
+                    raise ValueError("Insufficient data returned")
+                    
+                hist = etf.history(period='1y')
+                if hist.empty:
+                    raise ValueError("No historical data available")
+            except Exception as e:
+                # If the first attempt fails, try with ^-prefix (sometimes helps with indices)
+                st.warning(f"Retrying with alternative ticker format: ^{etf_ticker}")
+                try:
+                    etf = yf.Ticker(f"^{etf_ticker}")
+                    info = etf.info
+                    hist = etf.history(period='1y')
+                except Exception as inner_e:
+                    # Both attempts failed, use mock data
+                    st.error(f"Could not retrieve data for {etf_ticker}. Using sample data instead.")
+                    
+                    # Create mock data for display purposes
+                    info = {
+                        'shortName': f"{etf_ticker} ETF",
+                        'category': 'Exchange Traded Fund',
+                        'longBusinessSummary': f"This is a mock description for {etf_ticker} ETF since the actual data could not be retrieved. In a production environment, this would show real ETF information.",
+                        'regularMarketPrice': 100.0,
+                        'ytdReturn': 0.10,
+                        'expenseRatio': 0.0075
+                    }
+                    
+                    # Create mock historical data
+                    import numpy as np
+                    dates = pd.date_range(end=datetime.now(), periods=252, freq='B')  # 1 year of business days
+                    close_prices = 100 + np.cumsum(np.random.normal(0, 1, len(dates))/100)
+                    hist = pd.DataFrame({
+                        'Close': close_prices
+                    }, index=dates)
+                    
+                    st.info("Using simulated data for demonstration purposes.")
             
             # Display ETF info
             col1, col2 = st.columns([2, 1])
@@ -305,21 +346,22 @@ def show_etf_investing():
             
             with col2:
                 # Show price chart
-                hist = etf.history(period='1y')
-                
-                fig = px.line(
-                    hist, 
-                    y='Close',
-                    title=f"{etf_ticker} Price (1 Year)"
-                )
-                
-                fig.update_layout(
-                    xaxis_title="Date",
-                    yaxis_title="Price (USD)",
-                    hovermode="x unified"
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
+                if not hist.empty and 'Close' in hist.columns:
+                    fig = px.line(
+                        hist, 
+                        y='Close',
+                        title=f"{etf_ticker} Price (1 Year)"
+                    )
+                    
+                    fig.update_layout(
+                        xaxis_title="Date",
+                        yaxis_title="Price (USD)",
+                        hovermode="x unified"
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.error("No price chart data available")
             
             # Investment form
             st.subheader("Invest in this ETF")

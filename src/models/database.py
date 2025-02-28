@@ -125,7 +125,7 @@ class AiAnalysis(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     query = Column(Text)
-    result = Column(Text)
+    result = Column(Text)  # We'll store JSON as text
     model_used = Column(String(50))  # 'gpt-4', 'ollama-llama2', etc.
     timestamp = Column(DateTime, default=datetime.utcnow)
     cached_until = Column(DateTime, nullable=True)

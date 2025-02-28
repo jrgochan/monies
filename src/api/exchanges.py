@@ -23,8 +23,14 @@ def get_exchange_client(exchange_name: str, api_key: str, api_secret: str):
     
     try:
         if exchange_name.lower() == "binance":
-            # Use python-binance library
-            client = BinanceClient(api_key, api_secret)
+            # Use python-binance library with US endpoint for Binance
+            client = BinanceClient(api_key, api_secret, tld='us')
+            # Test connection
+            client.get_account()
+            return client
+        elif exchange_name.lower() == "binanceus":
+            # Use python-binance library with explicit US endpoint
+            client = BinanceClient(api_key, api_secret, tld='us')
             # Test connection
             client.get_account()
             return client
@@ -40,7 +46,11 @@ def get_exchange_client(exchange_name: str, api_key: str, api_secret: str):
             exchange.fetch_balance()
             return exchange
     except Exception as e:
-        logger.error(f"Error connecting to {exchange_name}: {str(e)}")
+        error_msg = str(e)
+        if "restricted location" in error_msg or "geographical restrictions" in error_msg:
+            logger.error(f"Binance access error: Service unavailable due to geographical restrictions. Using Binance.US or a VPN may resolve this issue.")
+        else:
+            logger.error(f"Error connecting to {exchange_name}: {error_msg}")
         return None
 
 def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dict:
@@ -51,9 +61,11 @@ def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dic
     result = {}
     
     try:
-        if exchange_name.lower() == "binance":
-            client = get_exchange_client(exchange_name, api_key, api_secret)
+        if exchange_name.lower() in ["binance", "binanceus"]:
+            # Always use binanceus mode regardless of what was selected
+            client = get_exchange_client("binanceus", api_key, api_secret)
             if not client:
+                logger.warning(f"{exchange_name} access failed. Check API keys are from Binance.US.")
                 return result
             
             # Get account info from Binance
@@ -91,7 +103,17 @@ def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dic
                     }
     
     except Exception as e:
-        logger.error(f"Error fetching balances from {exchange_name}: {str(e)}")
+        error_msg = str(e)
+        if "restricted location" in error_msg or "geographical restrictions" in error_msg:
+            logger.error(f"Access error: Service unavailable due to geographical restrictions. Make sure your API keys are from Binance.US, not regular Binance.")
+        else:
+            logger.error(f"Error fetching balances from {exchange_name}: {error_msg}")
+    
+    # If we have no results, return an empty dictionary with error flag
+    if not result:
+        logger.error(f"Failed to retrieve wallet data from {exchange_name}. Check API credentials and network connection.")
+        # Return empty result with error indicator
+        result = {"error": f"Cannot connect to {exchange_name}. Please check your API credentials and network connection."}
     
     return result
 
@@ -102,12 +124,14 @@ def get_current_prices(exchange_name: str, currencies: List[str] = None) -> Dict
     result = {}
     
     try:
-        if exchange_name.lower() == "binance":
-            # Use API key from environment or params
+        # Always use binanceus for Binance
+        if exchange_name.lower() in ["binance", "binanceus"]:
+            # Use API key from environment with US endpoint
             api_key = os.getenv("BINANCE_API_KEY", "")
             api_secret = os.getenv("BINANCE_SECRET_KEY", "")
             
-            client = BinanceClient(api_key, api_secret)
+            # Create client with US endpoint
+            client = BinanceClient(api_key, api_secret, tld='us')
             
             # Get all ticker prices
             all_tickers = client.get_all_tickers()
@@ -143,6 +167,46 @@ def get_current_prices(exchange_name: str, currencies: List[str] = None) -> Dict
     except Exception as e:
         logger.error(f"Error fetching prices from {exchange_name}: {str(e)}")
     
+    # If we have no results or need specific currencies, try alternative API
+    if not result or (currencies and not all(c in result for c in currencies)):
+        try:
+            # Try CoinGecko API as an alternative source
+            if currencies:
+                crypto_ids = [c.lower() for c in currencies]
+                ids_param = ",".join(crypto_ids)
+                api_url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids_param}&vs_currencies=usd"
+                response = requests.get(api_url)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    for crypto_id, price_data in data.items():
+                        # Convert to uppercase for consistency
+                        crypto_symbol = crypto_id.upper()
+                        if "usd" in price_data:
+                            result[crypto_symbol] = price_data["usd"]
+            
+            # If still missing currencies, fall back to defaults for those
+            missing_currencies = [c for c in currencies if c not in result] if currencies else []
+            if missing_currencies:
+                logger.info(f"Missing price data for: {missing_currencies}, using defaults")
+        except Exception as e:
+            logger.error(f"Error fetching from alternative API: {str(e)}")
+    
+    # If we have no results or are missing requested currencies, return error
+    if not result or (currencies and not all(c in result for c in currencies)):
+        missing = []
+        if currencies:
+            missing = [c for c in currencies if c not in result]
+        
+        error_msg = "Failed to retrieve current prices"
+        if missing:
+            error_msg += f" for: {', '.join(missing)}"
+        
+        logger.error(f"{error_msg}. Check network connection and API access.")
+        
+        # Set error flag in the result dictionary
+        result["error"] = f"Cannot connect to price data source. Please check your network connection."
+    
     return result
 
 def place_order(
@@ -165,10 +229,12 @@ def place_order(
     }
     
     try:
-        if exchange_name.lower() == "binance":
-            client = get_exchange_client(exchange_name, api_key, api_secret)
+        # Always use binanceus for Binance
+        if exchange_name.lower() in ["binance", "binanceus"]:
+            # Use binanceus client
+            client = get_exchange_client("binanceus", api_key, api_secret)
             if not client:
-                result['message'] = "Failed to connect to Binance"
+                result['message'] = "Failed to connect to Binance.US"
                 return result
             
             # Format symbol for Binance (no slash)
@@ -245,7 +311,12 @@ def place_order(
             result['message'] = "Order placed successfully"
     
     except Exception as e:
-        result['message'] = f"Error placing order: {str(e)}"
+        error_msg = str(e)
+        # Check for geographic restriction errors
+        if "restricted location" in error_msg or "geographical restrictions" in error_msg:
+            result['message'] = "Error placing order: Service unavailable due to geographical restrictions. Make sure you're using Binance.US API keys."
+        else:
+            result['message'] = f"Error placing order: {error_msg}"
     
     return result
 
@@ -262,8 +333,10 @@ def get_transaction_history(
     result = []
     
     try:
-        if exchange_name.lower() == "binance":
-            client = get_exchange_client(exchange_name, api_key, api_secret)
+        # Always use binanceus for Binance
+        if exchange_name.lower() in ["binance", "binanceus"]:
+            # Always use the US endpoint
+            client = get_exchange_client("binanceus", api_key, api_secret)
             if not client:
                 return result
             
@@ -349,6 +422,13 @@ def get_transaction_history(
     except Exception as e:
         logger.error(f"Error fetching transaction history from {exchange_name}: {str(e)}")
     
+    # Return empty result with error indication if we couldn't get transactions
+    if not result:
+        logger.error(f"Failed to retrieve transaction history from {exchange_name}. Check API credentials and network connection.")
+        # Add a special dictionary with error message instead of empty list
+        # This will help UI display an error message
+        result = [{"error": f"Cannot connect to {exchange_name} to retrieve transaction history. Please check your API credentials and network connection."}]
+    
     return result
 
 def get_supported_exchanges():
@@ -362,4 +442,66 @@ def get_supported_exchanges():
     if 'binance' not in exchanges:
         exchanges.append('binance')
     
+    # Add Binance.US explicitly for users in restricted regions
+    if 'binanceus' not in exchanges:
+        exchanges.append('binanceus')
+    
     return sorted(exchanges)
+
+
+# Add functions to support tests
+def get_wallet_balance_for_currency(exchange, currency, api_key, api_secret):
+    """
+    Get wallet balance for a specific currency (for test compatibility).
+    """
+    balances = get_wallet_balance(exchange, api_key, api_secret)
+    if currency in balances:
+        return balances[currency]
+    return {'free': 0.0, 'locked': 0.0, 'total': 0.0}
+
+
+def get_market_price(exchange, symbol, api_key, api_secret):
+    """
+    Get market price for a specific symbol (for test compatibility).
+    """
+    client = get_exchange_client(exchange, api_key, api_secret)
+    if not client:
+        return 0.0
+    
+    try:
+        if exchange.lower() == "binance":
+            ticker = client.get_symbol_ticker(symbol=symbol)
+            return float(ticker['price'])
+        else:
+            ticker = client.fetch_ticker(symbol)
+            return ticker['last']
+    except Exception as e:
+        logger.error(f"Error getting price for {symbol}: {str(e)}")
+        return 0.0
+
+
+def execute_trade(exchange, symbol, trade_type, quantity, price, api_key, api_secret):
+    """
+    Execute a trade (for test compatibility).
+    """
+    result = place_order(
+        exchange_name=exchange,
+        api_key=api_key,
+        api_secret=api_secret,
+        symbol=symbol,
+        order_type='limit',
+        side=trade_type,
+        amount=quantity,
+        price=price
+    )
+    
+    if result['success']:
+        return {
+            'status': 'FILLED',
+            'quantity': str(quantity),
+            'price': str(price * quantity)
+        }
+    return {
+        'status': 'FAILED',
+        'message': result['message']
+    }

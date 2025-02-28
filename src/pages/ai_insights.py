@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
 import yfinance as yf
+import numpy as np
+import json
 
 from src.utils.auth import require_login
 from src.models.database import SessionLocal, AiAnalysis
@@ -23,9 +25,12 @@ def cache_analysis(query, result, model_used, expiry_hours=24):
         # Check if analysis already exists
         existing = db.query(AiAnalysis).filter(AiAnalysis.query == query).first()
         
+        # Convert result to JSON string if it's a dictionary
+        result_text = json.dumps(result) if isinstance(result, dict) else result
+        
         if existing:
             # Update existing
-            existing.result = result
+            existing.result = result_text
             existing.model_used = model_used
             existing.timestamp = datetime.utcnow()
             existing.cached_until = datetime.utcnow() + timedelta(hours=expiry_hours)
@@ -33,7 +38,7 @@ def cache_analysis(query, result, model_used, expiry_hours=24):
             # Create new
             analysis = AiAnalysis(
                 query=query,
-                result=result,
+                result=result_text,
                 model_used=model_used,
                 cached_until=datetime.utcnow() + timedelta(hours=expiry_hours)
             )
@@ -44,6 +49,7 @@ def cache_analysis(query, result, model_used, expiry_hours=24):
     except Exception as e:
         db.rollback()
         st.error(f"Error caching analysis: {str(e)}")
+        # Don't let caching errors block the analysis functionality
         return False
     finally:
         db.close()
@@ -58,7 +64,16 @@ def get_cached_analysis(query):
         ).first()
         
         if analysis:
-            return analysis.result, analysis.model_used
+            # Try to parse as JSON, fall back to raw text if not valid JSON
+            try:
+                result = json.loads(analysis.result)
+            except (json.JSONDecodeError, TypeError):
+                result = analysis.result
+            return result, analysis.model_used
+        
+        return None, None
+    except Exception as e:
+        st.warning(f"Cache retrieval error: {str(e)}")
         return None, None
     finally:
         db.close()
@@ -102,15 +117,18 @@ def show_stock_analysis():
             with st.spinner("Analyzing stock data..."):
                 result = analyze_stock_trend(ticker, period)
                 
-                # Cache the result
-                if result['success']:
-                    cache_analysis(cache_key, result, "OpenAI")
+                # Cache the result (ignore errors)
+                try:
+                    if result.get('success', False):
+                        cache_analysis(cache_key, result, "OpenAI")
+                except Exception as e:
+                    st.warning(f"Could not cache result: {str(e)}")
         
         # Display results
         if isinstance(result, str):
             # If cached result was a string
             st.markdown(result)
-        elif result['success']:
+        elif result.get('success', False):
             # Display stock data
             data = result['data']
             
@@ -133,23 +151,75 @@ def show_stock_analysis():
                     value=f"${data['low']}"
                 )
             
-            # Display price chart
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period=period)
+            # Try to display price chart with improved error handling
+            try:
+                # Create a chart using Yahoo Finance data
+                st.write("Loading historical data...")
+                
+                try:
+                    # First attempt with standard ticker format
+                    stock = yf.Ticker(ticker)
+                    hist = stock.history(period=period)
+                    
+                    # Check if we got valid data
+                    if hist.empty or 'Close' not in hist.columns:
+                        raise ValueError("No valid price data found")
+                        
+                except Exception as e:
+                    # Try alternative ticker formats
+                    alternatives = [f"^{ticker}", f"{ticker}-USD", f"{ticker}.N"]
+                    success = False
+                    hist = None
+                    
+                    for alt_ticker in alternatives:
+                        try:
+                            st.info(f"Trying alternative ticker format: {alt_ticker}")
+                            stock = yf.Ticker(alt_ticker)
+                            hist = stock.history(period=period)
+                            if not hist.empty and 'Close' in hist.columns:
+                                success = True
+                                break
+                        except:
+                            continue
+                    
+                    if not success:
+                        # Create synthetic data for demonstration
+                        st.warning(f"Could not retrieve data for {ticker}. Using simulated data for visualization.")
+                        
+                        # Try to extract starting price
+                        start_price = 100.0  # Default
+                        
+                        # Generate time series
+                        dates = pd.date_range(end=datetime.now(), periods=100, freq='D')
+                        
+                        # Create a random walk price series
+                        volatility = 0.01  # 1% daily volatility
+                        returns = np.random.normal(0, volatility, len(dates))
+                        cumulative_returns = np.exp(np.cumsum(returns)) - 1
+                        prices = start_price * (1 + cumulative_returns)
+                        
+                        hist = pd.DataFrame({'Close': prices}, index=dates)
+                
+                # Create and display chart
+                if hist is not None and not hist.empty and 'Close' in hist.columns:
+                    fig = px.line(
+                        hist, 
+                        y='Close',
+                        title=f"{ticker} Price History ({period})"
+                    )
+                    
+                    fig.update_layout(
+                        xaxis_title="Date",
+                        yaxis_title="Price (USD)",
+                        hovermode="x unified"
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.error("Failed to generate price chart")
             
-            fig = px.line(
-                hist, 
-                y='Close',
-                title=f"{ticker} Price History ({period})"
-            )
-            
-            fig.update_layout(
-                xaxis_title="Date",
-                yaxis_title="Price (USD)",
-                hovermode="x unified"
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
+            except Exception as chart_error:
+                st.error(f"Could not display price chart: {str(chart_error)}")
             
             # Display AI analysis
             st.subheader("AI Analysis")
@@ -162,7 +232,7 @@ def show_stock_analysis():
                     st.markdown(f"### [{news_item['title']}]({news_item['link']})")
                     st.caption(f"{news_item['publisher']} • {news_item['date']}")
         else:
-            st.error(f"Error in analysis: {result['analysis']}")
+            st.error(f"Error in analysis: {result.get('analysis', 'Unknown error')}")
 
 def show_crypto_analysis():
     """Show cryptocurrency analysis section"""
@@ -191,15 +261,18 @@ def show_crypto_analysis():
             with st.spinner("Analyzing cryptocurrency data..."):
                 result = analyze_crypto_trend(symbol, days)
                 
-                # Cache the result
-                if result['success']:
-                    cache_analysis(cache_key, result, "OpenAI")
+                # Cache the result (ignore errors)
+                try:
+                    if result.get('success', False):
+                        cache_analysis(cache_key, result, "OpenAI")
+                except Exception as e:
+                    st.warning(f"Could not cache result: {str(e)}")
         
         # Display results
         if isinstance(result, str):
             # If cached result was a string
             st.markdown(result)
-        elif result['success']:
+        elif result.get('success', False):
             # Display crypto data
             data = result['data']
             
@@ -222,19 +295,89 @@ def show_crypto_analysis():
                     value=f"${data['low']}"
                 )
             
-            # Display price chart
-            ticker = f"{symbol}-USD"
+            # Display price chart safely
             try:
-                crypto = yf.Ticker(ticker)
-                hist = crypto.history(period=f"{days}d")
+                # Try to get price history with different formats
+                st.write("Loading historical data...")
+                hist = None
                 
-                if hist.empty:
-                    # Try alternative format
-                    ticker = f"{symbol}USD=X"
-                    crypto = yf.Ticker(ticker)
-                    hist = crypto.history(period=f"{days}d")
+                try:
+                    # First attempt - standard crypto format
+                    # Use Alpha Vantage API as primary source for crypto data (free tier)
+                    # This is more reliable than Yahoo Finance for crypto
+                    alpha_vantage_key = os.getenv("ALPHA_VANTAGE_KEY", "demo")
+                    crypto_url = f"https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={symbol}&market=USD&apikey={alpha_vantage_key}"
+                    
+                    response = requests.get(crypto_url)
+                    if response.status_code == 200 and "Time Series (Digital Currency Daily)" in response.json():
+                        # Process Alpha Vantage data
+                        data = response.json()["Time Series (Digital Currency Daily)"]
+                        
+                        # Convert to DataFrame
+                        av_data = []
+                        for date, values in data.items():
+                            av_data.append({
+                                'Date': date,
+                                'Open': float(values['1a. open (USD)']),
+                                'High': float(values['2a. high (USD)']),
+                                'Low': float(values['3a. low (USD)']),
+                                'Close': float(values['4a. close (USD)']),
+                                'Volume': float(values['5. volume'])
+                            })
+                        
+                        # Create DataFrame and sort by date
+                        hist = pd.DataFrame(av_data)
+                        hist['Date'] = pd.to_datetime(hist['Date'])
+                        hist = hist.sort_values('Date')
+                        hist = hist.set_index('Date')
+                        
+                        # Limit to requested days
+                        hist = hist.tail(days)
+                    else:
+                        # Fallback to Yahoo Finance if Alpha Vantage fails
+                        ticker = f"{symbol}-USD"
+                        crypto = yf.Ticker(ticker)
+                        hist = crypto.history(period=f"{days}d")
+                        
+                        # Verify data
+                        if hist.empty or 'Close' not in hist.columns:
+                            raise ValueError("No data found")
+                except Exception as e:
+                    # Try alternative formats
+                    alternatives = [f"{symbol}USD=X", f"{symbol}-USD.CC", f"{symbol}USDT=X"]
+                    success = False
+                    
+                    for alt_ticker in alternatives:
+                        try:
+                            st.info(f"Trying alternative ticker format: {alt_ticker}")
+                            crypto = yf.Ticker(alt_ticker)
+                            hist = crypto.history(period=f"{days}d")
+                            if not hist.empty and 'Close' in hist.columns:
+                                success = True
+                                break
+                        except:
+                            continue
+                    
+                    if not success:
+                        # Create synthetic data for demonstration
+                        st.warning(f"Could not retrieve data for {symbol}. Using simulated data for visualization.")
+                        
+                        # Use a default price 
+                        start_price = 1000.0 if symbol.upper() in ['BTC', 'ETH'] else 10.0
+                        
+                        # Generate time series
+                        dates = pd.date_range(end=datetime.now(), periods=days, freq='D')
+                        
+                        # Create a random walk price series
+                        volatility = 0.02  # 2% daily volatility for crypto
+                        returns = np.random.normal(0, volatility, len(dates))
+                        cumulative_returns = np.exp(np.cumsum(returns)) - 1
+                        prices = start_price * (1 + cumulative_returns)
+                        
+                        hist = pd.DataFrame({'Close': prices}, index=dates)
                 
-                if not hist.empty:
+                # Create and display chart if we have data
+                if hist is not None and not hist.empty and 'Close' in hist.columns:
                     fig = px.line(
                         hist, 
                         y='Close',
@@ -248,6 +391,8 @@ def show_crypto_analysis():
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.error("Failed to generate price chart")
             except Exception as e:
                 st.error(f"Error displaying chart: {str(e)}")
             
@@ -255,7 +400,7 @@ def show_crypto_analysis():
             st.subheader("AI Analysis")
             st.markdown(result['analysis'])
         else:
-            st.error(f"Error in analysis: {result['analysis']}")
+            st.error(f"Error in analysis: {result.get('analysis', 'Unknown error')}")
 
 def show_etf_recommendations():
     """Show ETF recommendations section"""
@@ -288,20 +433,23 @@ def show_etf_recommendations():
             with st.spinner("Generating ETF recommendations..."):
                 result = get_etf_recommendations(risk_profile, sectors)
                 
-                # Cache the result
-                if result['success']:
-                    cache_analysis(cache_key, result, "OpenAI")
+                # Cache the result (ignore errors)
+                try:
+                    if result.get('success', False):
+                        cache_analysis(cache_key, result, "OpenAI")
+                except Exception as e:
+                    st.warning(f"Could not cache result: {str(e)}")
         
         # Display results
         if isinstance(result, str):
             # If cached result was a string
             st.markdown(result)
-        elif result['success']:
+        elif result.get('success', False):
             # Display recommendations
             st.subheader("Recommended ETFs")
             
             # Create a table of ETFs
-            if result['recommendations']:
+            if result.get('recommendations', []):
                 etf_data = []
                 for etf in result['recommendations']:
                     etf_data.append({
@@ -350,7 +498,7 @@ def show_etf_recommendations():
             else:
                 st.info("No ETF recommendations available")
         else:
-            st.error(f"Error in analysis: {result['analysis']}")
+            st.error(f"Error in analysis: {result.get('analysis', 'Unknown error')}")
 
 def show_custom_analysis():
     """Show custom AI analysis section"""
@@ -392,8 +540,11 @@ def show_custom_analysis():
                         result = analyze_with_ollama(query)
                         model_name = "Ollama"
                     
-                    # Cache the result
-                    cache_analysis(cache_key, result, model_name)
+                    # Cache the result (ignore errors)
+                    try:
+                        cache_analysis(cache_key, result, model_name)
+                    except Exception as e:
+                        st.warning(f"Could not cache result: {str(e)}")
                 except Exception as e:
                     result = f"Error in analysis: {str(e)}"
         

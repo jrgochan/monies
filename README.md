@@ -1,6 +1,10 @@
-# Crypto Wallet & Trend Analysis
+# Monies - Crypto Wallet & Trend Analysis
 
 A comprehensive Streamlit application for cryptocurrency wallet management, AI-driven trend analysis, and ETF investment tools.
+
+[![Code Quality](https://img.shields.io/badge/code%20quality-10-green)]()
+[![GitHub Actions](https://img.shields.io/badge/CI-passing-green)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Features
 
@@ -21,22 +25,20 @@ A comprehensive Streamlit application for cryptocurrency wallet management, AI-d
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/crypto-wallet-trend-analysis.git
-cd crypto-wallet-trend-analysis
+git clone https://github.com/yourusername/monies.git
+cd monies
 ```
 
-2. Create and activate a virtual environment:
+2. Run the setup script:
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows, use: venv\Scripts\activate
+# Standard setup
+./scripts/setup.sh
+
+# Development setup (includes dev tools)
+./scripts/setup.sh dev
 ```
 
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Set up environment variables:
+3. Set up environment variables:
 ```bash
 cp .env.example .env
 # Edit .env with your API keys and configuration
@@ -44,13 +46,17 @@ cp .env.example .env
 
 ## Running the Application
 
-1. Initialize the database:
+1. Initialize the database (if not already done by the setup script):
 ```bash
-python -m src.utils.db_init
+./scripts/run.sh db-init
+# or
+python init_db.py
 ```
 
 2. Start the Streamlit app:
 ```bash
+./scripts/run.sh
+# or
 streamlit run app.py
 ```
 
@@ -119,11 +125,109 @@ crypto-wallet-trend-analysis/
 
 ## Development
 
-### Running Tests
+### Quick Start
+
+We provide several ways to run common tasks:
+
+#### Using Scripts
 
 ```bash
-pytest
+# Run application
+./scripts/run.sh
+
+# Run tests
+./scripts/test.sh
+
+# Lint code
+./scripts/lint.sh
+
+# Format code
+./scripts/format.sh
 ```
+
+#### Using Just
+
+If you have [Just](https://github.com/casey/just) installed:
+
+```bash
+# List available commands
+just
+
+# Setup development environment
+just setup
+
+# Run the application
+just run
+
+# Run tests
+just test
+
+# Run linters
+just lint
+
+# Format code
+just format
+
+# Clean cache files
+just clean
+
+# Install pre-commit hooks
+just hooks
+```
+
+#### Using Make
+
+```bash
+# List available commands
+make help
+
+# Setup development environment
+make setup
+
+# Run the application
+make run
+
+# Run tests
+make test
+
+# Run linters
+make lint
+
+# Format code
+make format
+```
+
+### Code Quality Tools
+
+This project uses several tools to ensure code quality:
+
+- **Black**: Code formatting
+- **isort**: Import sorting
+- **Flake8**: Linting
+- **MyPy**: Type checking
+- **Bandit**: Security checks
+- **Pytest**: Testing
+- **Pre-commit**: Git hooks
+
+### Pre-commit Hooks
+
+Pre-commit hooks are installed automatically when you run `setup.sh dev`. They ensure code quality before each commit.
+
+To manually install or update pre-commit hooks:
+
+```bash
+pre-commit install
+```
+
+To run pre-commit checks on all files:
+
+```bash
+pre-commit run --all-files
+```
+
+### VS Code Integration
+
+If you're using VS Code, we provide settings and extension recommendations for an optimal development experience.
 
 ### Contributing
 

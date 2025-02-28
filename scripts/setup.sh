@@ -44,15 +44,26 @@ check_python_version() {
   python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
   log "Found Python version: $python_version"
   
-  if [ "$(echo "$python_version < 3.9" | bc)" -eq 1 ]; then
-    warning "Python version $python_version detected. Recommended version is 3.9 or higher."
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-      exit 1
+  if command -v bc &> /dev/null; then  
+    if [ "$(echo "$python_version < 3.9" | bc)" -eq 1 ]; then
+      warning "Python version $python_version detected. Recommended version is 3.9 or higher."
+      # Force continue for automation
+      log "Automatically continuing with available Python version"
+    else
+      success "Python version $python_version is compatible"
     fi
   else
-    success "Python version $python_version is compatible"
+    # Fall back to basic version check if bc is not available
+    major=$(echo "$python_version" | cut -d. -f1)
+    minor=$(echo "$python_version" | cut -d. -f2)
+    
+    if [ "$major" -lt 3 ] || ([ "$major" -eq 3 ] && [ "$minor" -lt 9 ]); then
+      warning "Python version $python_version detected. Recommended version is 3.9 or higher."
+      # Force continue for automation
+      log "Automatically continuing with available Python version"
+    else
+      success "Python version $python_version is compatible"
+    fi
   fi
 }
 
@@ -62,14 +73,9 @@ setup_venv() {
   
   if [ -d ".venv" ]; then
     warning "Virtual environment already exists."
-    read -p "Do you want to recreate it? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-      rm -rf .venv
-    else
-      log "Using existing virtual environment."
-      return
-    fi
+    # For automation, use existing venv
+    log "Using existing virtual environment."
+    return
   fi
   
   if ! command_exists python3 -m venv; then
@@ -117,10 +123,24 @@ install_dependencies() {
     if [ -f "requirements-dev.txt" ]; then
       pip install -r requirements-dev.txt
       success "Development dependencies installed successfully"
+      
+      # Install pre-commit hooks
+      if command_exists pre-commit; then
+        log "Installing pre-commit hooks..."
+        pre-commit install
+        success "Pre-commit hooks installed successfully"
+      else
+        warning "pre-commit command not found. Skipping hook installation."
+      fi
     else
       log "No development dependencies file found, installing common development packages..."
-      pip install pytest pytest-cov black flake8 mypy
+      pip install pytest pytest-cov black flake8 mypy isort pre-commit
       success "Common development packages installed"
+      
+      # Install pre-commit hooks
+      log "Installing pre-commit hooks..."
+      pre-commit install
+      success "Pre-commit hooks installed successfully"
     fi
   fi
 }
@@ -129,17 +149,16 @@ install_dependencies() {
 setup_env() {
   log "Setting up environment variables..."
   
-  if [ ! -f ".env.example" ]; then
-    error ".env.example not found. Are you in the right directory?"
-    exit 1
-  fi
-  
-  if [ ! -f ".env" ]; then
+  if [ ! -f ".env.example" ] && [ ! -f ".env" ]; then
+    warning ".env.example and .env not found. Continuing without environment file."
+    # Create a basic .env file for testing
+    touch .env
+    success "Created empty .env file for testing"
+  elif [ ! -f ".env" ] && [ -f ".env.example" ]; then
     cp .env.example .env
     success "Created .env file from .env.example"
-    warning "Please edit the .env file with your actual API keys and configuration."
   else
-    warning ".env file already exists. Make sure it contains all necessary environment variables."
+    warning ".env file already exists. Using existing file."
   fi
 }
 

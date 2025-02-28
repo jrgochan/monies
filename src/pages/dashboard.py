@@ -42,17 +42,12 @@ def get_portfolio_value(wallets):
             portfolio[balance.currency] += balance.amount
             all_currencies.add(balance.currency)
     
-    # Get current prices (in demo, we'll simulate this)
-    # In production, would call: prices = get_current_prices("binance", list(all_currencies))
-    prices = {
-        "BTC": 69420.0,
-        "ETH": 3500.0,
-        "ADA": 0.45,
-        "SOL": 95.0,
-        "DOGE": 0.12,
-        "USDT": 1.0,
-        "USDC": 1.0
-    }
+    # Get current prices from exchange API (using Binance.US)
+    prices = get_current_prices("binanceus", list(all_currencies))
+    
+    # Check if we have an error in the prices result
+    if "error" in prices:
+        return 0, portfolio, prices
     
     # Calculate total value
     for currency, amount in portfolio.items():
@@ -72,25 +67,80 @@ def get_recent_transactions(user_id, limit=5):
     finally:
         db.close()
 
-def get_portfolio_history():
-    """Generate mock portfolio history data for demo"""
-    # In a real app, this would retrieve historical data from database
-    # For demo, we'll generate random data
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=30)
+def get_portfolio_history(wallets=None):
+    """Get portfolio history data. This function returns an error flag
+    if it cannot connect to external data sources.
+    """
+    # Initialize error flag
+    error = False
+    error_message = ""
     
-    dates = pd.date_range(start=start_date, end=end_date, freq='D')
-    portfolio_values = [100000]  # Start value
+    # Create a valid portfolio structure
+    portfolio = {}
+    all_currencies = set()
+    current_value = 0
     
-    # Generate random daily changes
-    for i in range(1, len(dates)):
-        daily_change = random.uniform(-0.03, 0.03)  # -3% to +3%
-        new_value = portfolio_values[-1] * (1 + daily_change)
-        portfolio_values.append(new_value)
+    if wallets:
+        try:
+            # Get balances for each wallet
+            for wallet in wallets:
+                balances = load_wallet_balances(wallet.id)
+                for balance in balances:
+                    if balance.currency not in portfolio:
+                        portfolio[balance.currency] = 0
+                    portfolio[balance.currency] += balance.amount
+                    all_currencies.add(balance.currency)
+            
+            # Only proceed if we have any currencies
+            if all_currencies:
+                # Get current prices
+                prices = get_current_prices("binanceus", list(all_currencies))
+                
+                # Check if prices have an error
+                if "error" in prices:
+                    error = True
+                    error_message = prices["error"]
+                    # Return error dataframe
+                    return pd.DataFrame({
+                        'date': [datetime.now()],
+                        'value': [0],
+                        'error': [True],
+                        'error_message': [error_message]
+                    })
+                
+                # Calculate current portfolio value
+                for currency, amount in portfolio.items():
+                    if currency in prices:
+                        current_value += amount * prices[currency]
+        except Exception as e:
+            import logging
+            logging.error(f"Error generating portfolio history: {str(e)}")
+            error = True
+            error_message = f"Failed to retrieve portfolio data: {str(e)}"
+            # Return error dataframe
+            return pd.DataFrame({
+                'date': [datetime.now()],
+                'value': [0],
+                'error': [True],
+                'error_message': [error_message]
+            })
     
+    # If we have no wallets or couldn't calculate value
+    if not wallets or current_value <= 0:
+        return pd.DataFrame({
+            'date': [datetime.now()],
+            'value': [0],
+            'error': [True],
+            'error_message': ["No portfolio data available or cannot connect to price source."]
+        })
+    
+    # At this point we have the current value but can't produce historical data
+    # Return a dataframe with just the current date and value, plus error indicators
     return pd.DataFrame({
-        'date': dates,
-        'value': portfolio_values
+        'date': [datetime.now()],
+        'value': [current_value],
+        'error': [True],
+        'error_message': ["Cannot retrieve historical data. Please check your network connection."]
     })
 
 def get_asset_allocation(portfolio, prices):
@@ -125,15 +175,28 @@ def show_dashboard():
     
     portfolio_value, portfolio, prices = get_portfolio_value(wallets)
     
+    # Check if we have an error in the prices
+    if "error" in prices:
+        st.error(prices["error"])
+        st.warning("Cannot retrieve current portfolio data. Please check your network connection and try again.")
+    
     # Display summary metrics
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric(
-            label="Total Portfolio Value", 
-            value=f"${portfolio_value:,.2f}",
-            delta=f"{random.uniform(-2.0, 5.0):.2f}%"  # Mock daily change
-        )
+        # Display portfolio value or error message
+        if "error" in prices:
+            st.metric(
+                label="Total Portfolio Value", 
+                value="Error",
+                delta=None
+            )
+        else:
+            st.metric(
+                label="Total Portfolio Value", 
+                value=f"${portfolio_value:,.2f}",
+                delta=None  # Removed the random delta
+            )
     
     with col2:
         st.metric(
@@ -155,54 +218,81 @@ def show_dashboard():
     with tab1:
         st.subheader("Portfolio Performance")
         
-        # Get portfolio history
-        portfolio_history = get_portfolio_history()
+        # Get portfolio history based on current wallet data
+        portfolio_history = get_portfolio_history(wallets)
         
-        # Plot line chart
-        fig = px.line(
-            portfolio_history, 
-            x='date', 
-            y='value',
-            title='30-Day Portfolio Value'
-        )
-        fig.update_layout(
-            xaxis_title="Date",
-            yaxis_title="Portfolio Value (USD)",
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        # Check if we have an error in the portfolio history
+        if 'error' in portfolio_history.columns and portfolio_history['error'].iloc[0]:
+            # Display error message instead of chart
+            st.error(portfolio_history['error_message'].iloc[0])
+            st.warning("Cannot display portfolio performance chart. Please check your network connection and try again.")
+        else:
+            # Plot line chart
+            fig = px.line(
+                portfolio_history, 
+                x='date', 
+                y='value',
+                title='30-Day Portfolio Value'
+            )
+            fig.update_layout(
+                xaxis_title="Date",
+                yaxis_title="Portfolio Value (USD)",
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig, use_container_width=True)
     
     with tab2:
         st.subheader("Asset Allocation")
         
-        # Get asset allocation
-        allocation = get_asset_allocation(portfolio, prices)
-        
-        # Create a pie chart
-        labels = [item['currency'] for item in allocation]
-        values = [item['value'] for item in allocation]
-        
-        fig = px.pie(
-            values=values,
-            names=labels,
-            title='Portfolio Allocation by Asset'
-        )
-        fig.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig, use_container_width=True)
+        # Check if we have an error in the prices
+        if "error" in prices:
+            st.error(prices["error"])
+            st.warning("Cannot display asset allocation. Please check your network connection and try again.")
+        else:
+            # Get asset allocation
+            allocation = get_asset_allocation(portfolio, prices)
+            
+            # Create a pie chart if we have allocation data
+            if allocation:
+                labels = [item['currency'] for item in allocation]
+                values = [item['value'] for item in allocation]
+                
+                if labels and values:
+                    fig = px.pie(
+                        values=values,
+                        names=labels,
+                        title='Portfolio Allocation by Asset'
+                    )
+                    fig.update_traces(textposition='inside', textinfo='percent+label')
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Insufficient data for allocation chart. Check your wallet balances.")
+            else:
+                st.info("No asset allocation data available. Try adding cryptocurrency to your wallets.")
         
         # Display allocation table
-        allocation_df = pd.DataFrame(allocation)
-        allocation_df['value'] = allocation_df['value'].map('${:,.2f}'.format)
-        
-        st.dataframe(
-            allocation_df.rename(columns={
-                'currency': 'Currency',
-                'amount': 'Amount',
-                'value': 'Value (USD)'
-            }),
-            hide_index=True,
-            use_container_width=True
-        )
+        if allocation:
+            allocation_df = pd.DataFrame(allocation)
+            # Check if the dataframe actually has the 'value' column before formatting
+            if 'value' in allocation_df.columns:
+                allocation_df['value'] = allocation_df['value'].map('${:,.2f}'.format)
+            
+            # Rename columns, ensure all expected columns exist
+            column_mapping = {}
+            if 'currency' in allocation_df.columns:
+                column_mapping['currency'] = 'Currency'
+            if 'amount' in allocation_df.columns:
+                column_mapping['amount'] = 'Amount'
+            if 'value' in allocation_df.columns:
+                column_mapping['value'] = 'Value (USD)'
+            
+            st.dataframe(
+                allocation_df.rename(columns=column_mapping),
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.info("No asset allocation data available. Try adding cryptocurrency to your wallets.")
     
     with tab3:
         st.subheader("Recent Transactions")

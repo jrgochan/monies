@@ -107,3 +107,16 @@ def require_login():
         st.stop()
         
     return st.session_state.user
+
+
+def generate_jwt_token(user_id):
+    """Generate a JWT token for a user (test-compatible function)."""
+    return create_access_token({"user_id": user_id})
+
+
+def validate_jwt_token(token):
+    """Validate a JWT token and return the payload (test-compatible function)."""
+    payload = verify_token(token)
+    if not payload:
+        raise Exception("Invalid or expired token")
+    return payload

@@ -170,10 +170,27 @@ def show_add_wallet_form(user_id):
             )
             
             if wallet_type == "exchange":
+                # Get supported exchanges and put binanceus at the top of the list
+                exchanges = get_supported_exchanges()
+                
+                # Attempt to reorder to prioritize binanceus
+                if "binanceus" in exchanges:
+                    exchanges.remove("binanceus")
+                    exchanges = ["binanceus"] + exchanges
+                
+                # Remove regular binance to avoid confusion
+                if "binance" in exchanges:
+                    exchanges.remove("binance")
+                    
                 exchange = st.selectbox(
                     "Exchange",
-                    options=get_supported_exchanges()
+                    options=exchanges,
+                    index=0
                 )
+                
+                # Show helpful message about Binance.US
+                if exchange == "binanceus":
+                    st.info("Using Binance.US which is appropriate for US-based users. Make sure your API keys are from Binance.US, not regular Binance.")
                 
                 api_key = st.text_input("API Key", type="password")
                 api_secret = st.text_input("API Secret", type="password")
@@ -255,14 +272,21 @@ def show_wallet_card(wallet, user_id, prices=None):
                             db.close()
                             
                             if api_key and api_secret:
-                                balances = get_wallet_balance(wallet.exchange, api_key, api_secret)
+                                # Use binanceus for all Binance connections
+                                exchange_name = "binanceus" if wallet.exchange.lower() == "binance" else wallet.exchange
+                                
+                                # If it's a Binance account, show info message
+                                if wallet.exchange.lower() == "binance":
+                                    st.info("Using Binance.US API for compatibility")
+                                
+                                balances = get_wallet_balance(exchange_name, api_key, api_secret)
                                 if balances:
                                     if update_wallet_balances(wallet.id, balances):
                                         st.success("Balances updated")
                                         time.sleep(1)
                                         st.experimental_rerun()
                                 else:
-                                    st.error("Failed to fetch balances from exchange")
+                                    st.error("Failed to fetch balances. Make sure your API keys are from Binance.US, not regular Binance.")
                             else:
                                 st.error("API keys not found")
                         except Exception as e:
@@ -286,8 +310,15 @@ def show_wallet_card(wallet, user_id, prices=None):
                         db.close()
                         
                         if api_key and api_secret:
+                            # Use binanceus for all Binance connections
+                            exchange_name = "binanceus" if wallet.exchange.lower() == "binance" else wallet.exchange
+                            
+                            # If it's a Binance account, show info message
+                            if wallet.exchange.lower() == "binance":
+                                st.info("Using Binance.US API for compatibility")
+                                
                             with st.spinner("Fetching transactions..."):
-                                txs = get_transaction_history(wallet.exchange, api_key, api_secret)
+                                txs = get_transaction_history(exchange_name, api_key, api_secret)
                                 if txs:
                                     # Create a dataframe for display
                                     df = pd.DataFrame(txs)
