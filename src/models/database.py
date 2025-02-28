@@ -27,12 +27,16 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # User preferences
+    data_source_preferences = Column(Text, default="{}")  # JSON string containing data source preferences
+    
     # Relationships
     wallets = relationship("Wallet", back_populates="user")
     api_keys = relationship("ApiKey", back_populates="user")
     social_accounts = relationship("SocialAccount", back_populates="user")
     scheduled_posts = relationship("ScheduledPost", back_populates="user")
     transactions = relationship("Transaction", back_populates="user")
+    data_sources = relationship("UserDataSource", back_populates="user")
 
 class Wallet(Base):
     __tablename__ = "wallets"
@@ -120,6 +124,34 @@ class ScheduledPost(Base):
     # Relationships
     user = relationship("User", back_populates="scheduled_posts")
 
+class DataSource(Base):
+    __tablename__ = "data_sources"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True)  # 'yahoo_finance', 'alpha_vantage', 'financial_modeling_prep', etc.
+    display_name = Column(String(100))
+    category = Column(String(50))  # 'stocks', 'crypto', 'forex', 'etf', etc.
+    api_required = Column(Boolean, default=False)
+    api_key_field = Column(String(50), nullable=True)  # Environment variable name
+    priority = Column(Integer, default=0)  # Lower number = higher priority
+    enabled = Column(Boolean, default=True)
+    
+    # Relationships
+    user_preferences = relationship("UserDataSource", back_populates="data_source")
+
+class UserDataSource(Base):
+    __tablename__ = "user_data_sources"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    data_source_id = Column(Integer, ForeignKey("data_sources.id"))
+    enabled = Column(Boolean, default=True)
+    priority = Column(Integer, default=0)  # User-specific priority override
+    
+    # Relationships
+    user = relationship("User", back_populates="data_sources")
+    data_source = relationship("DataSource", back_populates="user_preferences")
+
 class AiAnalysis(Base):
     __tablename__ = "ai_analyses"
     
@@ -127,6 +159,7 @@ class AiAnalysis(Base):
     query = Column(Text)
     result = Column(Text)  # We'll store JSON as text
     model_used = Column(String(50))  # 'gpt-4', 'ollama-llama2', etc.
+    data_sources = Column(Text, nullable=True)  # JSON array of data sources used
     timestamp = Column(DateTime, default=datetime.utcnow)
     cached_until = Column(DateTime, nullable=True)
 

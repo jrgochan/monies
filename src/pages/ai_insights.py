@@ -115,12 +115,19 @@ def show_stock_analysis():
         else:
             # Run new analysis
             with st.spinner("Analyzing stock data..."):
-                result = analyze_stock_trend(ticker, period)
+                user_id = st.session_state.user.get('id') if 'user' in st.session_state else None
+                result = analyze_stock_trend(ticker, period, user_id)
+                
+                # Show data source info if available
+                if result.get('aggregated'):
+                    st.success(f"Data aggregated from multiple sources: {', '.join(result.get('data_sources', []))}")
+                elif result.get('data_source'):
+                    st.info(f"Data provided by {result.get('data_source')}")
                 
                 # Cache the result (ignore errors)
                 try:
                     if result.get('success', False):
-                        cache_analysis(cache_key, result, "OpenAI")
+                        cache_analysis(cache_key, result, result.get('data_source', "AI API"))
                 except Exception as e:
                     st.warning(f"Could not cache result: {str(e)}")
         

@@ -8,7 +8,7 @@ import os
 import logging
 from datetime import datetime, timedelta
 import time
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Tuple
 from dotenv import load_dotenv
 import numpy as np
 
@@ -19,13 +19,16 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure OpenAI API key
-api_key = os.getenv("OPENAI_API_KEY", "")
+# Configure API keys
+openai_api_key = os.getenv("OPENAI_API_KEY", "")
+alpha_vantage_key = os.getenv("ALPHA_VANTAGE_KEY", "")
+fmp_api_key = os.getenv("FMP_API_KEY", "")
+polygon_api_key = os.getenv("POLYGON_API_KEY", "")
 
 # Initialize OpenAI client
 client = None
 try:
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=openai_api_key)
 except Exception as e:
     logger.warning(f"Could not initialize OpenAI client: {str(e)}")
 
@@ -35,96 +38,54 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama2")
 
 def analyze_with_openai(prompt: str, model: str = "gpt-3.5-turbo") -> str:
     """
-    Analyze data using OpenAI's API.
-    Compatible with both older and newer versions of the OpenAI Python package.
+    Analyze data using OpenAI API.
+    
+    Args:
+        prompt: The prompt to send to OpenAI
+        model: The model to use
+        
+    Returns:
+        Analysis result as a string
     """
     try:
-        if not api_key:
-            return "Error: OpenAI API key is not configured"
-        
-        # First try the new client style (OpenAI >=1.0.0)
-        try:
-            if client:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a financial analyst specializing in cryptocurrency and stock markets. Provide concise, data-driven insights."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000,
-                    temperature=0.3
-                )
-                return response.choices[0].message.content
-        except Exception as e1:
-            logger.warning(f"New OpenAI client error: {str(e1)}")
-        
-        try:
-            # Try with direct openai module usage
-            direct_client = OpenAI(api_key=api_key)
-            response = direct_client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a financial analyst specializing in cryptocurrency and stock markets. Provide concise, data-driven insights."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1000,
-                temperature=0.3
-            )
-            return response.choices[0].message.content
-        except Exception as e2:
-            logger.warning(f"Direct OpenAI client error: {str(e2)}")
+        if not client:
+            raise ValueError("OpenAI client not initialized")
             
-        # Fall back to the generic AI analysis when OpenAI isn't working
-        return generate_generic_analysis(prompt)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a financial analyst providing insights on market data."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1000
+        )
         
+        return completion.choices[0].message.content
     except Exception as e:
         logger.error(f"Error with OpenAI analysis: {str(e)}")
-        return generate_generic_analysis(prompt)
-
-def generate_generic_analysis(prompt: str) -> str:
-    """Generate a simple, generic analysis when AI services are unavailable."""
-    # Extract key information from the prompt
-    import re
-    
-    # Default response
-    response = "Based on the available data, the asset shows typical market fluctuations. "
-    response += "Consider diversification and consult with a financial advisor for investment decisions."
-    
-    # Try to find some key metrics
-    percent_match = re.search(r"Change: ([-+]?\d+\.?\d*)%", prompt)
-    if percent_match:
-        percent_change = float(percent_match.group(1))
-        if percent_change > 15:
-            response = "The asset has shown significant bullish momentum with strong upward price action. "
-            response += "This positive trend indicates growing market interest, though be cautious of potential corrections."
-        elif percent_change < -15:
-            response = "The asset has experienced a notable bearish trend with substantial price decline. "
-            response += "This downturn suggests market uncertainty, though it may present buying opportunities for long-term investors."
-        elif percent_change > 0:
-            response = "The asset has shown modest positive performance, indicating stable market sentiment. "
-            response += "The current trend appears sustainable, but watch for resistance levels and broader market conditions."
-        else:
-            response = "The asset has experienced a slight decline, suggesting cautious market sentiment. "
-            response += "Monitor support levels and watch for potential trend reversals in the coming sessions."
-    
-    # Add generic investment advice
-    response += "\n\nAs with all investments, maintain a diversified portfolio aligned with your risk tolerance. "
-    response += "Past performance does not guarantee future results, and market conditions can change rapidly."
-    
-    return response
+        raise
 
 def analyze_with_ollama(prompt: str, model: str = None) -> str:
     """
-    Analyze data using Ollama API.
-    """
-    if not model:
-        model = OLLAMA_MODEL
+    Analyze data using Ollama locally hosted model.
     
+    Args:
+        prompt: The prompt to send to Ollama
+        model: The model to use (defaults to environment variable or llama2)
+        
+    Returns:
+        Analysis result as a string
+    """
+    if model is None:
+        model = OLLAMA_MODEL
+        
     try:
+        # Ensure base URL ends with a slash
         base_url = OLLAMA_BASE_URL
         if not base_url.endswith('/'):
             base_url += '/'
-        
+            
+        # Make API call to Ollama
         response = requests.post(
             f"{base_url}api/generate",
             json={
@@ -144,76 +105,659 @@ def analyze_with_ollama(prompt: str, model: str = None) -> str:
         logger.error(f"Error with Ollama analysis: {str(e)}")
         return f"Error: {str(e)}"
 
-def analyze_stock_trend(ticker: str, period: str = "6mo") -> Dict:
+def get_alpha_vantage_data(ticker: str, period: str = "6mo") -> Tuple[bool, pd.DataFrame, Dict[str, Any]]:
+    """
+    Get stock data from Alpha Vantage API.
+    
+    Args:
+        ticker: Stock ticker symbol
+        period: Time period for analysis
+        
+    Returns:
+        Tuple of (success, DataFrame of historical data, company info)
+    """
+    if not alpha_vantage_key:
+        return False, pd.DataFrame(), {}
+        
+    try:
+        # Get daily time series data
+        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&outputsize=full&apikey={alpha_vantage_key}"
+        response = requests.get(url)
+        
+        if response.status_code != 200:
+            logger.error(f"Alpha Vantage API returned status code {response.status_code}")
+            return False, pd.DataFrame(), {}
+            
+        data = response.json()
+        
+        if "Error Message" in data:
+            logger.error(f"Alpha Vantage API error: {data['Error Message']}")
+            return False, pd.DataFrame(), {}
+            
+        if "Time Series (Daily)" not in data:
+            logger.error("No time series data found in Alpha Vantage response")
+            return False, pd.DataFrame(), {}
+            
+        # Convert to DataFrame
+        time_series = data["Time Series (Daily)"]
+        df = pd.DataFrame(time_series).T
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        
+        # Rename columns to match yfinance format
+        df.columns = ['1. open', '2. high', '3. low', '4. close', '5. volume']
+        df = df.rename(columns={
+            '1. open': 'Open',
+            '2. high': 'High',
+            '3. low': 'Low',
+            '4. close': 'Close',
+            '5. volume': 'Volume'
+        })
+        
+        # Convert columns to numeric
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col])
+        
+        # Filter based on period
+        if period.endswith('d'):
+            days = int(period[:-1])
+            start_date = datetime.now() - timedelta(days=days)
+            df = df[df.index >= start_date]
+        elif period.endswith('mo'):
+            months = int(period[:-2])
+            start_date = datetime.now() - timedelta(days=months*30)
+            df = df[df.index >= start_date]
+        elif period.endswith('y'):
+            years = int(period[:-1])
+            start_date = datetime.now() - timedelta(days=years*365)
+            df = df[df.index >= start_date]
+            
+        # Get company overview
+        overview_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={ticker}&apikey={alpha_vantage_key}"
+        overview_response = requests.get(overview_url)
+        company_info = {}
+        
+        if overview_response.status_code == 200:
+            company_info = overview_response.json()
+            
+        return True, df, company_info
+    except Exception as e:
+        logger.error(f"Error getting data from Alpha Vantage: {str(e)}")
+        return False, pd.DataFrame(), {}
+
+def get_financial_modeling_prep_data(ticker: str, period: str = "6mo") -> Tuple[bool, pd.DataFrame, Dict[str, Any]]:
+    """
+    Get stock data from Financial Modeling Prep API.
+    
+    Args:
+        ticker: Stock ticker symbol
+        period: Time period for analysis
+        
+    Returns:
+        Tuple of (success, DataFrame of historical data, company info)
+    """
+    if not fmp_api_key:
+        return False, pd.DataFrame(), {}
+        
+    try:
+        # Calculate the start date based on period
+        if period.endswith('d'):
+            days = int(period[:-1])
+            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        elif period.endswith('mo'):
+            months = int(period[:-2])
+            start_date = (datetime.now() - timedelta(days=months*30)).strftime('%Y-%m-%d')
+        elif period.endswith('y'):
+            years = int(period[:-1])
+            start_date = (datetime.now() - timedelta(days=years*365)).strftime('%Y-%m-%d')
+        else:
+            start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+            
+        # Get historical price data
+        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?from={start_date}&apikey={fmp_api_key}"
+        response = requests.get(url)
+        
+        if response.status_code != 200:
+            logger.error(f"FMP API returned status code {response.status_code}")
+            return False, pd.DataFrame(), {}
+            
+        data = response.json()
+        
+        if "historical" not in data:
+            logger.error("No historical data found in FMP response")
+            return False, pd.DataFrame(), {}
+            
+        # Convert to DataFrame
+        historical = data["historical"]
+        df = pd.DataFrame(historical)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date')
+        df = df.sort_index()
+        
+        # Rename columns to match yfinance format
+        df = df.rename(columns={
+            'open': 'Open',
+            'high': 'High',
+            'low': 'Low',
+            'close': 'Close',
+            'volume': 'Volume'
+        })
+        
+        # Get company profile
+        profile_url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={fmp_api_key}"
+        profile_response = requests.get(profile_url)
+        company_info = {}
+        
+        if profile_response.status_code == 200:
+            profile_data = profile_response.json()
+            if profile_data and len(profile_data) > 0:
+                company_info = profile_data[0]
+            
+        return True, df, company_info
+    except Exception as e:
+        logger.error(f"Error getting data from Financial Modeling Prep: {str(e)}")
+        return False, pd.DataFrame(), {}
+
+def get_yahoo_finance_data(ticker: str, period: str = "6mo") -> Tuple[bool, pd.DataFrame, Dict[str, Any]]:
+    """
+    Get stock data from Yahoo Finance.
+    
+    Args:
+        ticker: Stock ticker symbol
+        period: Time period for analysis
+        
+    Returns:
+        Tuple of (success, DataFrame of historical data, company info)
+    """
+    try:
+        # Get historical data from Yahoo Finance with multiple attempts
+        max_attempts = 3
+        hist = None
+        info = {'shortName': ticker}
+        
+        for attempt in range(max_attempts):
+            try:
+                # Try the download method
+                hist = yf.download(ticker, period=period, progress=False)
+                if not hist.empty:
+                    # Get company info if possible
+                    try:
+                        stock = yf.Ticker(ticker)
+                        info = stock.info
+                    except:
+                        pass
+                    break
+                    
+                # If we got an empty DataFrame, try using Ticker method
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period=period)
+                info = stock.info
+                if not hist.empty:
+                    break
+                
+                time.sleep(1)
+            except Exception as e:
+                logging.error(f"Yahoo Finance attempt {attempt+1} failed: {str(e)}")
+                if attempt < max_attempts - 1:
+                    time.sleep(2)
+        
+        if hist is None or hist.empty:
+            return False, pd.DataFrame(), {}
+            
+        return True, hist, info
+    except Exception as e:
+        logger.error(f"Error getting data from Yahoo Finance: {str(e)}")
+        return False, pd.DataFrame(), {}
+
+def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -> Dict:
     """
     Analyze a stock's trend using historical data and AI.
+    
+    Args:
+        ticker: Stock ticker symbol
+        period: Time period for analysis
+        user_id: Optional user ID to get data source preferences
+        
+    Returns:
+        Dictionary with analysis results
     """
     result = {
         'ticker': ticker,
         'period': period,
         'data': {},
         'analysis': '',
-        'success': False
+        'success': False,
+        'data_source': '',
+        'data_sources': []
     }
     
+    # Get user preferences for data sources if user_id is provided
+    user_preferences = None
+    db = None
+    data_sources = []
+    
     try:
-        # Get historical data from Yahoo Finance
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period=period)
+        if user_id:
+            from src.models.database import SessionLocal
+            from src.utils.data_aggregator import DataAggregator
+            import json
+            
+            db = SessionLocal()
+            # Get user's data source preferences
+            from src.models.database import User
+            user = db.query(User).filter(User.id == user_id).first()
+            
+            if user and user.data_source_preferences:
+                try:
+                    preferences = json.loads(user.data_source_preferences)
+                    if 'stocks' in preferences:
+                        user_preferences = preferences['stocks']
+                except:
+                    user_preferences = None
+            
+            # Get enabled data sources in priority order
+            data_sources = DataAggregator.get_user_data_sources(db, user_id, 'stocks')
+            data_sources = [ds for ds in data_sources if ds['enabled']]
+    except Exception as e:
+        logging.error(f"Error getting user preferences: {str(e)}")
+    
+    # List to collect results from all data sources
+    all_results = []
+    
+    # If we have user-specific data sources, use those in priority order
+    if data_sources:
+        # Helper function to process data for each source
+        def get_stock_data_from_source(source_name):
+            source_result = {
+                'ticker': ticker,
+                'period': period,
+                'data': {},
+                'analysis': '',
+                'success': False,
+                'data_source': source_name
+            }
+            
+            if source_name == 'Financial Modeling Prep' and fmp_api_key:
+                success, hist, company_info = get_financial_modeling_prep_data(ticker, period)
+                if success and not hist.empty:
+                    # Basic statistics
+                    start_price = hist['Close'].iloc[0]
+                    end_price = hist['Close'].iloc[-1]
+                    percent_change = ((end_price - start_price) / start_price) * 100
+                    high = hist['High'].max()
+                    low = hist['Low'].min()
+                    
+                    # Calculate some indicators
+                    hist['MA50'] = hist['Close'].rolling(window=min(50, len(hist))).mean()
+                    hist['MA200'] = hist['Close'].rolling(window=min(200, len(hist))).mean()
+                    
+                    # Create data object with FMP specific mappings
+                    source_result['data'] = {
+                        'start_date': hist.index[0].strftime('%Y-%m-%d'),
+                        'end_date': hist.index[-1].strftime('%Y-%m-%d'),
+                        'start_price': f"{start_price:.2f}",
+                        'end_price': f"{end_price:.2f}",
+                        'percent_change': f"{percent_change:.2f}",
+                        'high': f"{high:.2f}",
+                        'low': f"{low:.2f}",
+                        'volume_avg': int(hist['Volume'].mean()) if 'Volume' in hist.columns else 0,
+                        'company_name': company_info.get('companyName', ticker),
+                        'sector': company_info.get('sector', 'Unknown'),
+                        'industry': company_info.get('industry', 'Unknown'),
+                        'market_cap': company_info.get('mktCap', None),
+                        'pe_ratio': company_info.get('pe', None)
+                    }
+                    source_result['success'] = True
+                    return source_result
+            
+            elif source_name == 'Alpha Vantage' and alpha_vantage_key:
+                success, hist, company_info = get_alpha_vantage_data(ticker, period)
+                if success and not hist.empty:
+                    # Basic statistics
+                    start_price = hist['Close'].iloc[0]
+                    end_price = hist['Close'].iloc[-1]
+                    percent_change = ((end_price - start_price) / start_price) * 100
+                    high = hist['High'].max()
+                    low = hist['Low'].min()
+                    
+                    # Calculate some indicators
+                    hist['MA50'] = hist['Close'].rolling(window=min(50, len(hist))).mean()
+                    hist['MA200'] = hist['Close'].rolling(window=min(200, len(hist))).mean()
+                    
+                    # Create data object with Alpha Vantage specific mappings
+                    source_result['data'] = {
+                        'start_date': hist.index[0].strftime('%Y-%m-%d'),
+                        'end_date': hist.index[-1].strftime('%Y-%m-%d'),
+                        'start_price': f"{start_price:.2f}",
+                        'end_price': f"{end_price:.2f}",
+                        'percent_change': f"{percent_change:.2f}",
+                        'high': f"{high:.2f}",
+                        'low': f"{low:.2f}",
+                        'volume_avg': int(hist['Volume'].mean()) if 'Volume' in hist.columns else 0,
+                        'company_name': company_info.get('Name', ticker),
+                        'sector': company_info.get('Sector', 'Unknown'),
+                        'industry': company_info.get('Industry', 'Unknown'),
+                        'market_cap': company_info.get('MarketCapitalization', None),
+                        'pe_ratio': company_info.get('PERatio', None)
+                    }
+                    source_result['success'] = True
+                    return source_result
+            
+            elif source_name == 'Yahoo Finance':
+                success, hist, info = get_yahoo_finance_data(ticker, period)
+                if success and not hist.empty:
+                    # Basic statistics
+                    start_price = hist['Close'].iloc[0]
+                    end_price = hist['Close'].iloc[-1]
+                    percent_change = ((end_price - start_price) / start_price) * 100
+                    high = hist['High'].max()
+                    low = hist['Low'].min()
+                    
+                    # Calculate some indicators
+                    hist['MA50'] = hist['Close'].rolling(window=min(50, len(hist))).mean()
+                    hist['MA200'] = hist['Close'].rolling(window=min(200, len(hist))).mean()
+                    
+                    # Create data object
+                    source_result['data'] = {
+                        'start_date': hist.index[0].strftime('%Y-%m-%d'),
+                        'end_date': hist.index[-1].strftime('%Y-%m-%d'),
+                        'start_price': f"{start_price:.2f}",
+                        'end_price': f"{end_price:.2f}",
+                        'percent_change': f"{percent_change:.2f}",
+                        'high': f"{high:.2f}",
+                        'low': f"{low:.2f}",
+                        'volume_avg': int(hist['Volume'].mean()) if 'Volume' in hist.columns else 0,
+                        'company_name': info.get('shortName', ticker),
+                        'sector': info.get('sector', 'Unknown'),
+                        'industry': info.get('industry', 'Unknown'),
+                        'market_cap': info.get('marketCap', None),
+                        'pe_ratio': info.get('trailingPE', None)
+                    }
+                    
+                    # Try to get recent news
+                    try:
+                        stock = yf.Ticker(ticker)
+                        news = stock.news
+                        if news:
+                            source_result['data']['news'] = [
+                                {
+                                    'title': item.get('title', ''),
+                                    'link': item.get('link', ''),
+                                    'publisher': item.get('publisher', ''),
+                                    'date': datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%Y-%m-%d')
+                                }
+                                for item in news[:3]  # Just take the top 3 news
+                            ]
+                    except:
+                        pass
+                        
+                    source_result['success'] = True
+                    return source_result
+            
+            return None
         
-        if hist.empty:
-            result['analysis'] = f"No data found for stock {ticker}"
-            return result
-        
-        # Basic statistics
-        start_price = hist['Close'].iloc[0]
-        end_price = hist['Close'].iloc[-1]
-        percent_change = ((end_price - start_price) / start_price) * 100
-        high = hist['High'].max()
-        low = hist['Low'].min()
-        
-        # Calculate some indicators
-        hist['MA50'] = hist['Close'].rolling(window=50).mean()
-        hist['MA200'] = hist['Close'].rolling(window=200).mean()
-        
-        # Get company information
-        info = stock.info
-        
-        # Create data object
-        result['data'] = {
-            'start_date': hist.index[0].strftime('%Y-%m-%d'),
-            'end_date': hist.index[-1].strftime('%Y-%m-%d'),
-            'start_price': f"{start_price:.2f}",
-            'end_price': f"{end_price:.2f}",
-            'percent_change': f"{percent_change:.2f}",
-            'high': f"{high:.2f}",
-            'low': f"{low:.2f}",
-            'volume_avg': int(hist['Volume'].mean()),
-            'company_name': info.get('shortName', ticker),
-            'sector': info.get('sector', 'Unknown'),
-            'industry': info.get('industry', 'Unknown'),
-            'market_cap': info.get('marketCap', None),
-            'pe_ratio': info.get('trailingPE', None)
+        # Map data source names from database to display names
+        source_name_map = {
+            'financial_modeling_prep': 'Financial Modeling Prep',
+            'alpha_vantage': 'Alpha Vantage', 
+            'yahoo_finance': 'Yahoo Finance'
         }
         
-        # Try to get recent news
-        try:
-            news = stock.news
-            if news:
-                result['data']['news'] = [
-                    {
-                        'title': item.get('title', ''),
-                        'link': item.get('link', ''),
-                        'publisher': item.get('publisher', ''),
-                        'date': datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%Y-%m-%d')
-                    }
-                    for item in news[:3]  # Just take the top 3 news
-                ]
-        except:
-            # News retrieval is not critical
-            pass
+        # Process each data source
+        for ds in data_sources:
+            source_display_name = source_name_map.get(ds['name'], ds['name'])
+            source_result = get_stock_data_from_source(source_display_name)
+            
+            # Add to results if successful
+            if source_result and source_result.get('success'):
+                all_results.append(source_result)
         
-        # Generate summary using AI
+        # Check if we have enough results for aggregation
+        if len(all_results) > 0:
+            # Check if we should aggregate data
+            should_aggregate = False
+            min_sources = 2  # Default minimum sources for aggregation
+            
+            if user_preferences and 'aggregate' in user_preferences:
+                should_aggregate = user_preferences['aggregate']
+                if 'min_sources' in user_preferences:
+                    min_sources = user_preferences['min_sources']
+            
+            if should_aggregate and len(all_results) >= min_sources:
+                # Import data aggregator
+                from src.utils.data_aggregator import DataAggregator
+                
+                # Aggregate data from all sources
+                result = DataAggregator.aggregate_stock_data(all_results)
+                result['success'] = True
+                
+                # Close the database connection if it was opened
+                if db:
+                    db.close()
+                
+                # Generate AI analysis if data is available
+                if result.get('data'):
+                    try:
+                        # Prepare prompt for AI
+                        prompt = f"""
+                        Analyze the following stock data for {ticker} ({result['data']['company_name']}):
+                        
+                        Period: {period}
+                        Date range: {result['data']['start_date']} to {result['data']['end_date']}
+                        Starting price: ${result['data']['start_price']}
+                        Current price: ${result['data']['end_price']}
+                        Change: {result['data']['percent_change']}%
+                        Highest price in period: ${result['data']['high']}
+                        Lowest price in period: ${result['data']['low']}
+                        Average daily volume: {result['data']['volume_avg']}
+                        Sector: {result['data']['sector']}
+                        Industry: {result['data']['industry']}
+                        Data source: Aggregated from multiple sources
+                        
+                        Provide a concise analysis (maximum 200 words) of this stock's trend over the given period. 
+                        Mention whether it's bullish, bearish, or neutral. Note any significant events or patterns.
+                        Conclude with a brief outlook on what investors might expect in the near term.
+                        """
+                        
+                        # Try OpenAI first, fall back to Ollama
+                        try:
+                            result['analysis'] = analyze_with_openai(prompt)
+                        except Exception as e:
+                            logger.error(f"OpenAI analysis failed, falling back to Ollama: {str(e)}")
+                            result['analysis'] = analyze_with_ollama(prompt)
+                    except Exception as e:
+                        logger.error(f"Error generating analysis: {str(e)}")
+                        result['analysis'] = f"Error generating analysis: {str(e)}"
+                
+                return result
+            elif len(all_results) > 0:
+                # Just use the first (highest priority) result
+                result = all_results[0]
+                result['success'] = True
+                
+                # Close the database connection if it was opened
+                if db:
+                    db.close()
+                
+                # Generate AI analysis if data is available
+                if result.get('data'):
+                    try:
+                        # Prepare prompt for AI
+                        prompt = f"""
+                        Analyze the following stock data for {ticker} ({result['data']['company_name']}):
+                        
+                        Period: {period}
+                        Date range: {result['data']['start_date']} to {result['data']['end_date']}
+                        Starting price: ${result['data']['start_price']}
+                        Current price: ${result['data']['end_price']}
+                        Change: {result['data']['percent_change']}%
+                        Highest price in period: ${result['data']['high']}
+                        Lowest price in period: ${result['data']['low']}
+                        Average daily volume: {result['data']['volume_avg']}
+                        Sector: {result['data']['sector']}
+                        Industry: {result['data']['industry']}
+                        Data source: {result['data_source']}
+                        
+                        Provide a concise analysis (maximum 200 words) of this stock's trend over the given period. 
+                        Mention whether it's bullish, bearish, or neutral. Note any significant events or patterns.
+                        Conclude with a brief outlook on what investors might expect in the near term.
+                        """
+                        
+                        # Try OpenAI first, fall back to Ollama
+                        try:
+                            result['analysis'] = analyze_with_openai(prompt)
+                        except Exception as e:
+                            logger.error(f"OpenAI analysis failed, falling back to Ollama: {str(e)}")
+                            result['analysis'] = analyze_with_ollama(prompt)
+                    except Exception as e:
+                        logger.error(f"Error generating analysis: {str(e)}")
+                        result['analysis'] = f"Error generating analysis: {str(e)}"
+                
+                return result
+    
+    # Use default fallback approach if no user preferences or if all user-preferred sources failed
+    # Try getting data from Financial Modeling Prep first (prioritized source)
+    if fmp_api_key:
+        success, hist, company_info = get_financial_modeling_prep_data(ticker, period)
+        if success and not hist.empty:
+            result['data_source'] = 'Financial Modeling Prep'
+            logger.info(f"Using Financial Modeling Prep data for {ticker}")
+            
+            # Process the data
+            try:
+                # Basic statistics
+                start_price = hist['Close'].iloc[0]
+                end_price = hist['Close'].iloc[-1]
+                percent_change = ((end_price - start_price) / start_price) * 100
+                high = hist['High'].max()
+                low = hist['Low'].min()
+                
+                # Calculate indicators
+                hist['MA50'] = hist['Close'].rolling(window=min(50, len(hist))).mean()
+                hist['MA200'] = hist['Close'].rolling(window=min(200, len(hist))).mean()
+                
+                # Create data object with FMP specific mappings
+                result['data'] = {
+                    'start_date': hist.index[0].strftime('%Y-%m-%d'),
+                    'end_date': hist.index[-1].strftime('%Y-%m-%d'),
+                    'start_price': f"{start_price:.2f}",
+                    'end_price': f"{end_price:.2f}",
+                    'percent_change': f"{percent_change:.2f}",
+                    'high': f"{high:.2f}",
+                    'low': f"{low:.2f}",
+                    'volume_avg': int(hist['Volume'].mean()) if 'Volume' in hist.columns else 0,
+                    'company_name': company_info.get('companyName', ticker),
+                    'sector': company_info.get('sector', 'Unknown'),
+                    'industry': company_info.get('industry', 'Unknown'),
+                    'market_cap': company_info.get('mktCap', None),
+                    'pe_ratio': company_info.get('pe', None)
+                }
+            except Exception as e:
+                logger.error(f"Error processing FMP data: {str(e)}")
+                # Fall through to next data source
+    
+    # Try Alpha Vantage if FMP failed
+    if alpha_vantage_key and not result['data']:
+        success, hist, company_info = get_alpha_vantage_data(ticker, period)
+        if success and not hist.empty:
+            result['data_source'] = 'Alpha Vantage'
+            logger.info(f"Using Alpha Vantage data for {ticker}")
+            
+            # Process the data
+            try:
+                # Basic statistics
+                start_price = hist['Close'].iloc[0]
+                end_price = hist['Close'].iloc[-1]
+                percent_change = ((end_price - start_price) / start_price) * 100
+                high = hist['High'].max()
+                low = hist['Low'].min()
+                
+                # Calculate indicators
+                hist['MA50'] = hist['Close'].rolling(window=min(50, len(hist))).mean()
+                hist['MA200'] = hist['Close'].rolling(window=min(200, len(hist))).mean()
+                
+                # Create data object with Alpha Vantage specific mappings
+                result['data'] = {
+                    'start_date': hist.index[0].strftime('%Y-%m-%d'),
+                    'end_date': hist.index[-1].strftime('%Y-%m-%d'),
+                    'start_price': f"{start_price:.2f}",
+                    'end_price': f"{end_price:.2f}",
+                    'percent_change': f"{percent_change:.2f}",
+                    'high': f"{high:.2f}",
+                    'low': f"{low:.2f}",
+                    'volume_avg': int(hist['Volume'].mean()) if 'Volume' in hist.columns else 0,
+                    'company_name': company_info.get('Name', ticker),
+                    'sector': company_info.get('Sector', 'Unknown'),
+                    'industry': company_info.get('Industry', 'Unknown'),
+                    'market_cap': company_info.get('MarketCapitalization', None),
+                    'pe_ratio': company_info.get('PERatio', None)
+                }
+            except Exception as e:
+                logger.error(f"Error processing Alpha Vantage data: {str(e)}")
+                # Fall through to Yahoo Finance as last resort
+    
+    # Finally, try Yahoo Finance as a fallback
+    if not result['data']:
+        success, hist, info = get_yahoo_finance_data(ticker, period)
+        if success and not hist.empty:
+            result['data_source'] = 'Yahoo Finance'
+            logger.info(f"Using Yahoo Finance data for {ticker}")
+            
+            # Process the data
+            try:
+                # Basic statistics
+                start_price = hist['Close'].iloc[0]
+                end_price = hist['Close'].iloc[-1]
+                percent_change = ((end_price - start_price) / start_price) * 100
+                high = hist['High'].max()
+                low = hist['Low'].min()
+                
+                # Calculate indicators
+                hist['MA50'] = hist['Close'].rolling(window=min(50, len(hist))).mean()
+                hist['MA200'] = hist['Close'].rolling(window=min(200, len(hist))).mean()
+                
+                # Create data object
+                result['data'] = {
+                    'start_date': hist.index[0].strftime('%Y-%m-%d'),
+                    'end_date': hist.index[-1].strftime('%Y-%m-%d'),
+                    'start_price': f"{start_price:.2f}",
+                    'end_price': f"{end_price:.2f}",
+                    'percent_change': f"{percent_change:.2f}",
+                    'high': f"{high:.2f}",
+                    'low': f"{low:.2f}",
+                    'volume_avg': int(hist['Volume'].mean()) if 'Volume' in hist.columns else 0,
+                    'company_name': info.get('shortName', ticker),
+                    'sector': info.get('sector', 'Unknown'),
+                    'industry': info.get('industry', 'Unknown'),
+                    'market_cap': info.get('marketCap', None),
+                    'pe_ratio': info.get('trailingPE', None)
+                }
+                
+                # Try to get recent news
+                try:
+                    stock = yf.Ticker(ticker)
+                    news = stock.news
+                    if news:
+                        result['data']['news'] = [
+                            {
+                                'title': item.get('title', ''),
+                                'link': item.get('link', ''),
+                                'publisher': item.get('publisher', ''),
+                                'date': datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%Y-%m-%d')
+                            }
+                            for item in news[:3]  # Just take the top 3 news
+                        ]
+                except:
+                    pass
+            except Exception as e:
+                logger.error(f"Error processing Yahoo Finance data: {str(e)}")
+                # If we couldn't process the data from any source, return error
+                if not result['data']:
+                    result['analysis'] = f"No data found for stock {ticker}. We tried multiple data sources but couldn't retrieve the data."
+                    return result
+    
+    # If we have data from any source, generate AI analysis
+    if result['data']:
         try:
             # Prepare prompt for AI
             prompt = f"""
@@ -229,6 +773,7 @@ def analyze_stock_trend(ticker: str, period: str = "6mo") -> Dict:
             Average daily volume: {result['data']['volume_avg']}
             Sector: {result['data']['sector']}
             Industry: {result['data']['industry']}
+            Data source: {result['data_source']}
             
             Provide a concise analysis (maximum 200 words) of this stock's trend over the given period. 
             Mention whether it's bullish, bearish, or neutral. Note any significant events or patterns.
@@ -238,19 +783,19 @@ def analyze_stock_trend(ticker: str, period: str = "6mo") -> Dict:
             # Try OpenAI first, fall back to Ollama
             try:
                 result['analysis'] = analyze_with_openai(prompt)
-            except:
+            except Exception as e:
+                logger.error(f"OpenAI analysis failed, falling back to Ollama: {str(e)}")
                 result['analysis'] = analyze_with_ollama(prompt)
-            
+                
             result['success'] = True
-        
         except Exception as e:
-            logger.error(f"Error generating analysis for {ticker}: {str(e)}")
+            logger.error(f"Error generating analysis: {str(e)}")
             result['analysis'] = f"Error generating analysis: {str(e)}"
-    
-    except Exception as e:
-        logger.error(f"Error analyzing stock {ticker}: {str(e)}")
-        result['analysis'] = f"Error: {str(e)}"
-    
+            
+    # Close database connection if it was opened
+    if db:
+        db.close()
+            
     return result
 
 def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
@@ -416,13 +961,13 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
             except Exception as e:
                 logger.error(f"Error with OpenAI analysis: {str(e)}")
                 # Fall back to generic analysis
-                result['analysis'] = generate_generic_analysis(prompt)
+                result['analysis'] = analyze_with_ollama(prompt)
             
             result['success'] = True
         
         except Exception as e:
             logger.error(f"Error generating analysis for {symbol}: {str(e)}")
-            result['analysis'] = generate_generic_analysis(prompt)
+            result['analysis'] = "Error generating analysis. Please try again later."
             result['success'] = True  # Still mark as success since we have data
     
     except Exception as e:
@@ -509,7 +1054,7 @@ def get_etf_recommendations(risk_profile: str = "moderate", sectors: List[str] =
                 # Add a placeholder with minimal information
                 recommendations.append({
                     'ticker': etf_ticker,
-                    'name': f"{etf_ticker} ETF",
+                    'name': etf_ticker,
                     'category': '',
                     'expense_ratio': 0.0,
                     'yearly_change': 0.0,
@@ -518,244 +1063,41 @@ def get_etf_recommendations(risk_profile: str = "moderate", sectors: List[str] =
         
         result['recommendations'] = recommendations
         
-        # Generate analysis using AI
-        try:
-            # Prepare prompt
-            etf_details = "\n".join([f"- {r['ticker']}: {r['name']} ({r['category']})" for r in recommendations])
+        # Generate analysis
+        if len(recommendations) > 0:
+            # Prepare recommendation data for analysis
+            etf_data = "\n".join([
+                f"- {r['ticker']} ({r['name']}): 1yr return {r['yearly_change']}%, expense ratio {r['expense_ratio']}%" 
+                for r in recommendations[:5]
+            ])
             
             prompt = f"""
-            Provide an investment strategy for a {risk_profile} risk profile investor interested in the following sectors: {', '.join(sectors) if sectors else 'various'}.
+            Analyze the following ETF recommendations for a {risk_profile} risk profile investor:
             
-            Recommended ETFs:
-            {etf_details}
+            {etf_data}
             
-            Given these ETFs and the risk profile, provide a concise (150 words max) investment strategy that explains:
-            1. How these ETFs fit the investor's risk profile
-            2. Why these particular ETFs are recommended
-            3. How the investor should allocate their portfolio across these ETFs
-            4. Any additional considerations for this investment strategy
+            Provide a concise analysis (maximum 150 words) explaining why these ETFs are appropriate for 
+            a {risk_profile} risk profile.
+            
+            Mention the benefits of this allocation and any potential considerations or risks.
             """
             
-            # Get AI analysis
             try:
                 result['analysis'] = analyze_with_openai(prompt)
-            except:
-                result['analysis'] = analyze_with_ollama(prompt)
+            except Exception as e:
+                try:
+                    result['analysis'] = analyze_with_ollama(prompt)
+                except:
+                    result['analysis'] = f"These ETFs are tailored for {risk_profile} investors, providing a balanced approach to market exposure. Consider individual research before investing."
             
             result['success'] = True
         
-        except Exception as e:
-            logger.error(f"Error generating ETF analysis: {str(e)}")
-            result['analysis'] = f"Error generating analysis: {str(e)}"
-            result['success'] = True  # Still mark as success since we have recommendations
-    
     except Exception as e:
-        logger.error(f"Error getting ETF recommendations: {str(e)}")
+        logger.error(f"Error generating ETF recommendations: {str(e)}")
         result['analysis'] = f"Error: {str(e)}"
     
     return result
 
-
-def analyze_market_trends(symbol: str, timeframe: str) -> str:
-    """
-    Analyze market trends for a specific cryptocurrency or stock.
-    
-    Args:
-        symbol: The ticker symbol of the cryptocurrency or stock to analyze
-        timeframe: The timeframe for analysis (e.g., 'hourly', 'daily', 'weekly')
-    
-    Returns:
-        A string containing the market trend analysis
-    """
-    try:
-        # Determine appropriate period for given timeframe
-        period_map = {
-            'hourly': '1d',
-            'daily': '1mo',
-            'weekly': '3mo',
-            'monthly': '6mo'
-        }
-        period = period_map.get(timeframe, '1mo')
-        
-        # For crypto, use different period format
-        days_map = {
-            'hourly': 1,
-            'daily': 30,
-            'weekly': 90,
-            'monthly': 180
-        }
-        days = days_map.get(timeframe, 30)
-        
-        # Determine if this is a crypto or stock
-        # Simple heuristic - common crypto symbols are 3-4 characters
-        is_crypto = len(symbol) <= 4 and symbol.upper() in ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'DOT']
-        
-        # Create prompt for market analysis
-        prompt = f"""
-        Analyze market trends for {symbol} over the {timeframe} timeframe.
-        
-        Consider:
-        - Price movements
-        - Trading volume
-        - Market sentiment
-        - Key support and resistance levels
-        - Recent news that might impact price
-        
-        Provide a concise analysis that highlights key patterns and potential future movements.
-        """
-        
-        # Get detailed market data
-        if is_crypto:
-            result = analyze_crypto_trend(symbol, days)
-            if result['success']:
-                return result['analysis']
-        else:
-            result = analyze_stock_trend(symbol, period)
-            if result['success']:
-                return result['analysis']
-        
-        # If data retrieval failed, use AI to generate analysis based on the prompt only
-        return analyze_with_openai(prompt)
-    
-    except Exception as e:
-        logger.error(f"Error in analyze_market_trends: {str(e)}")
-        return f"Error analyzing market trends for {symbol}: {str(e)}"
-
-
-def generate_investment_advice(portfolio: List[Dict[str, Any]], risk_level: str = 'moderate') -> str:
-    """
-    Generate investment advice for a portfolio of assets.
-    
-    Args:
-        portfolio: A list of dictionaries, each containing 'symbol' and 'allocation' keys
-        risk_level: The investor's risk tolerance ('conservative', 'moderate', or 'aggressive')
-    
-    Returns:
-        A string containing investment advice for the portfolio
-    """
-    try:
-        # Extract symbols and allocations
-        symbols = [item['symbol'] for item in portfolio]
-        allocations = [item['allocation'] for item in portfolio]
-        
-        # Create a prompt for investment advice
-        symbols_str = ', '.join([f"{s} ({a*100:.1f}%)" for s, a in zip(symbols, allocations)])
-        prompt = f"""
-        Generate investment advice for a portfolio with the following assets:
-        {symbols_str}
-        
-        Risk tolerance: {risk_level}
-        
-        Provide advice on:
-        1. Potential portfolio rebalancing
-        2. Asset allocation suggestions
-        3. Risk assessment
-        4. Opportunities for diversification
-        5. Specific recommendations for each asset
-        
-        The advice should align with a {risk_level} risk tolerance profile.
-        """
-        
-        # Get market data for context (for the top 3 assets)
-        market_context = []
-        for asset in portfolio[:3]:
-            symbol = asset['symbol']
-            try:
-                # Try to get some basic data for this asset (crypto or stock)
-                if symbol in ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'DOT']:
-                    result = analyze_crypto_trend(symbol, 30)
-                    if result['success'] and result['data']:
-                        change = result['data'].get('percent_change', 0)
-                        market_context.append(f"{symbol}: {change}% change in last 30 days")
-                else:
-                    result = analyze_stock_trend(symbol, '1mo')
-                    if result['success'] and result['data']:
-                        change = result['data'].get('percent_change', 0)
-                        market_context.append(f"{symbol}: {change}% change in last month")
-            except Exception as inner_e:
-                logger.warning(f"Error getting data for {symbol}: {str(inner_e)}")
-        
-        # Add market context to prompt if available
-        if market_context:
-            prompt += "\n\nRecent market performance:\n" + "\n".join(market_context)
-        
-        # Get AI-generated advice
-        return analyze_with_openai(prompt)
-    
-    except Exception as e:
-        logger.error(f"Error in generate_investment_advice: {str(e)}")
-        return f"Error generating investment advice: {str(e)}"
-
-
-def predict_price_movement(symbol: str, timeframe: str = '7d') -> str:
-    """
-    Predict price movement for a specific asset over a given timeframe.
-    
-    Args:
-        symbol: The ticker symbol of the asset to analyze
-        timeframe: The prediction timeframe (e.g., '1d', '7d', '30d')
-    
-    Returns:
-        A string containing the price movement prediction
-    """
-    try:
-        # Map timeframe to a lookback period (for historical context)
-        lookback_map = {
-            '1d': '7d',
-            '3d': '14d',
-            '7d': '30d',
-            '14d': '60d',
-            '30d': '90d'
-        }
-        
-        # Default to 30 days if timeframe not recognized
-        days = int(timeframe.replace('d', ''))
-        lookback = lookback_map.get(timeframe, '30d')
-        lookback_days = int(lookback.replace('d', ''))
-        
-        # Determine if this is a crypto or stock (simple heuristic)
-        is_crypto = symbol.upper() in ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'DOT']
-        
-        # Get historical data
-        data = None
-        if is_crypto:
-            result = analyze_crypto_trend(symbol, lookback_days)
-            if result['success']:
-                data = result['data']
-        else:
-            result = analyze_stock_trend(symbol, lookback)
-            if result['success']:
-                data = result['data']
-        
-        # Create prompt for price prediction
-        prompt = f"""
-        Predict the price movement for {symbol} over the next {timeframe}.
-        
-        """
-        
-        # Add data context if available
-        if data:
-            prompt += f"""
-            Based on recent data:
-            - Current price: ${data.get('end_price', 'N/A')}
-            - Price change over last {lookback_days} days: {data.get('percent_change', 'N/A')}%
-            - Highest price: ${data.get('high', 'N/A')}
-            - Lowest price: ${data.get('low', 'N/A')}
-            """
-        
-        prompt += f"""
-        Provide a concise prediction that:
-        1. Estimates potential price range for {symbol} over the next {timeframe}
-        2. Identifies key factors that could influence the price
-        3. Assesses the confidence level of this prediction
-        4. Notes any significant events that might impact this asset
-        
-        Remember to emphasize that this is a prediction, not financial advice, and markets are inherently unpredictable.
-        """
-        
-        # Get AI-generated prediction
-        return analyze_with_openai(prompt)
-    
-    except Exception as e:
-        logger.error(f"Error in predict_price_movement: {str(e)}")
-        return f"Error predicting price movement for {symbol}: {str(e)}"
+def generate_generic_analysis(prompt: str) -> str:
+    """Generate a generic analysis when AI systems fail"""
+    return "Analysis could not be generated at this time. Please try again later."

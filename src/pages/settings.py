@@ -6,10 +6,12 @@ import os
 from typing import Dict, List, Tuple
 
 from src.utils.auth import require_login, hash_password
-from src.models.database import SessionLocal, User, ApiKey
+from src.models.database import SessionLocal, User, ApiKey, DataSource, UserDataSource
 from src.utils.security import store_api_key, get_api_key, encrypt_data, decrypt_data
 from src.utils.api_config import APIConfigManager
 from src.utils.api_tester import APITester
+from src.utils.data_aggregator import DataAggregator
+import json
 
 def update_user_password(user_id, new_password):
     """Update a user's password"""
@@ -227,6 +229,107 @@ def show_preferences(user_id):
         horizontal=True
     )
     
+    # Data source preferences section
+    st.subheader("Data Source Preferences")
+    st.info("Configure which data sources to use for financial data and their priority.")
+    
+    # Get the database session
+    db = SessionLocal()
+    
+    try:
+        # Get all available data sources
+        all_categories = ["stocks", "crypto", "etf"]
+        
+        # Create tabs for each category
+        tabs = st.tabs(["Stocks", "Cryptocurrencies", "ETFs"])
+        
+        for i, category in enumerate(all_categories):
+            with tabs[i]:
+                # Get data sources for this category
+                data_sources = DataAggregator.get_user_data_sources(db, user_id, category)
+                
+                if not data_sources:
+                    st.warning(f"No data sources available for {category}.")
+                    continue
+                
+                st.markdown(f"### {category.title()} Data Sources")
+                st.markdown("Drag to reorder sources by priority. Sources higher in the list will be tried first.")
+                
+                # Create a form for each category
+                with st.form(f"data_source_form_{category}"):
+                    # Create a list of enabled sources with checkboxes
+                    enabled_sources = []
+                    for ds in data_sources:
+                        enabled = st.checkbox(
+                            f"{ds['display_name']} ({ds['name']})",
+                            value=ds['enabled'],
+                            key=f"ds_{ds['id']}_{category}"
+                        )
+                        
+                        # Show API requirement info
+                        if ds['api_required']:
+                            if ds['api_key_field']:
+                                env_value = os.environ.get(ds['api_key_field'], "")
+                                if env_value:
+                                    st.info(f"API key found in environment variable {ds['api_key_field']}")
+                                else:
+                                    st.warning(f"API key required in environment variable {ds['api_key_field']}")
+                        
+                        enabled_sources.append({
+                            "data_source_id": ds['id'],
+                            "enabled": enabled
+                        })
+                    
+                    # Aggregation options
+                    st.markdown("### Aggregation Options")
+                    
+                    aggregate_data = st.checkbox(
+                        "Aggregate data from multiple sources",
+                        value=True,
+                        help="When enabled, data from multiple sources will be combined and averaged."
+                    )
+                    
+                    min_sources = st.slider(
+                        "Minimum sources for aggregation",
+                        min_value=1,
+                        max_value=len(data_sources),
+                        value=min(2, len(data_sources)),
+                        help="Minimum number of data sources required for aggregation."
+                    )
+                    
+                    # Get user's current preferences
+                    user_obj = db.query(User).filter(User.id == user_id).first()
+                    preferences = {}
+                    
+                    if user_obj and user_obj.data_source_preferences:
+                        try:
+                            preferences = json.loads(user_obj.data_source_preferences)
+                        except:
+                            preferences = {}
+                    
+                    # Update preferences
+                    if category not in preferences:
+                        preferences[category] = {}
+                    
+                    preferences[category]["aggregate"] = aggregate_data
+                    preferences[category]["min_sources"] = min_sources
+                    
+                    # Save button
+                    if st.form_submit_button(f"Save {category.title()} Preferences"):
+                        # Update enabled/disabled state
+                        DataAggregator.update_user_data_source_preferences(db, user_id, enabled_sources)
+                        
+                        # Update user preferences
+                        user_obj = db.query(User).filter(User.id == user_id).first()
+                        if user_obj:
+                            user_obj.data_source_preferences = json.dumps(preferences)
+                            db.commit()
+                        
+                        st.success(f"{category.title()} data source preferences saved successfully!")
+    
+    finally:
+        db.close()
+    
     # Notification settings
     with st.form("notification_settings"):
         st.subheader("Notification Settings")
@@ -240,8 +343,8 @@ def show_preferences(user_id):
             st.checkbox("AI insights updates", value=True)
         
         # Save button
-        if st.form_submit_button("Save Preferences"):
-            st.success("Preferences saved successfully")
+        if st.form_submit_button("Save Notification Preferences"):
+            st.success("Notification preferences saved successfully")
             # In a real app, save to database
 
 def show_data_export(user_id):
@@ -614,9 +717,9 @@ def show_api_connections(user_id):
                 
                 # Create an expansion section for each API
                 for api in apis:
-                    with st.expander(f"{api['name']} Configuration", expanded=False, anchor=f"{api['service_id']}_configuration"):
+                    with st.expander(f"{api['name']} Configuration", expanded=False):
                         # Display API info
-                        st.markdown(f"**{api['name']}**")
+                        st.markdown(f"**{api['name']}** (ID: {api['service_id']})")
                         st.markdown(f"{api['description']}")
                         st.markdown(f"[Website]({api['website']}) | [API Documentation]({api['api_docs']})")
                         
@@ -630,6 +733,19 @@ def show_api_connections(user_id):
                         if api.get("env_var_secret"):
                             current_secret = APIConfigManager.get_api_value_from_env(api.get("env_var_secret"))
                         
+                        # Display current status and test button (outside the form)
+                        if not api.get("needs_key", True) or (current_key and (not api.get("needs_secret", False) or current_secret)):
+                            # We have enough info to test the connection
+                            st.markdown("**Current Status**")
+                            if st.button(f"Test Connection", key=f"test_{api['service_id']}"):
+                                with st.spinner(f"Testing connection to {api['name']}..."):
+                                    success, message = APIConfigManager.test_api_connection(api['service_id'])
+                                    if success:
+                                        st.success(message)
+                                    else:
+                                        st.error(message)
+                            st.markdown("---")
+                                    
                         # Create configuration form
                         with st.form(f"{api['service_id']}_config_form"):
                             # Special handling for URL-based services like Ollama
@@ -641,22 +757,6 @@ def show_api_connections(user_id):
                                 key_label = "API Key" if api.get("needs_key", True) else "Not Required"
                                 key_help = f"Your {api['name']} API key" if api.get("needs_key", True) else "No API key required for this service"
                                 secret_required = api.get("needs_secret", False)
-                            
-                            # Display current status
-                            if not api.get("needs_key", True) or (current_key and (not secret_required or current_secret)):
-                                # We have enough info to test the connection
-                                col1, col2 = st.columns([3, 1])
-                                with col1:
-                                    st.markdown("**Current Status**")
-                                with col2:
-                                    # Add a test button outside the form
-                                    if st.button(f"Test Connection", key=f"test_{api['service_id']}"):
-                                        with st.spinner(f"Testing connection to {api['name']}..."):
-                                            success, message = APIConfigManager.test_api_connection(api['service_id'])
-                                            if success:
-                                                st.success(message)
-                                            else:
-                                                st.error(message)
                             
                             # API key input
                             if api.get("needs_key", True):
