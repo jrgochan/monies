@@ -8,24 +8,66 @@
   "python.linting.mypyEnabled": true,
   "python.linting.pylintEnabled": true,
   "python.linting.banditEnabled": true,
+  "python.linting.flake8Args": ["--max-line-length=88", "--extend-ignore=E203"],
+  "python.linting.mypyArgs": ["--ignore-missing-imports", "--disallow-untyped-defs", "--disallow-incomplete-defs"],
   "python.formatting.provider": "black",
+  "python.formatting.blackArgs": ["--line-length=88"],
   "python.testing.pytestEnabled": true,
   "python.testing.unittestEnabled": false,
   "python.testing.nosetestsEnabled": false,
   "python.testing.pytestArgs": [
-    "tests"
+    "tests",
+    "-v",
+    "--cov=src",
+    "--cov-report=term"
   ],
   "[python]": {
     "editor.rulers": [
       88
     ],
-    "editor.defaultFormatter": "ms-python.black-formatter"
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": false,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
   },
   "files.exclude": {
     "**/__pycache__": true,
     "**/.pytest_cache": true,
     "**/*.pyc": true,
-    "**/.mypy_cache": true
+    "**/.mypy_cache": true,
+    "**/.coverage": true,
+    "**/.eggs": true,
+    "**/*.egg-info": true,
+    "**/.DS_Store": true
   },
-  "python.analysis.typeCheckingMode": "basic"
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/bower_components": true,
+    "**/*.code-search": true,
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.mypy_cache": true,
+    "**/htmlcov": true
+  },
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.autoImportCompletions": true,
+  "autoDocstring.docstringFormat": "google",
+  "autoDocstring.startOnNewLine": true,
+  "python.terminal.activateEnvironment": true,
+  "explorer.compactFolders": false,
+  "streamlit.webServerPort": 8501,
+  "streamlit.useWSL": false,
+  "sqltools.connections": [
+    {
+      "name": "Monies SQLite DB",
+      "driver": "SQLite",
+      "database": "${workspaceFolder}/data/crypto_wallet.db",
+      "group": "Monies"
+    }
+  ]
 }
