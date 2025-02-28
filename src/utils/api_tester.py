@@ -101,8 +101,9 @@ class APITester:
             import hmac
             import hashlib
             import time
+            import base64
             
-            # Coinbase Pro API endpoint for testing
+            # Coinbase API endpoint for testing
             url = "https://api.coinbase.com/v2/user"
             
             # Create timestamp for the request
@@ -110,8 +111,16 @@ class APITester:
             
             # Create signature
             message = timestamp + "GET" + "/v2/user"
+            
+            # The API secret is Base64 encoded, so we need to decode it first
+            try:
+                secret_bytes = base64.b64decode(api_secret)
+            except Exception:
+                # If decoding fails, try using the raw string (for backward compatibility)
+                secret_bytes = api_secret.encode('utf-8')
+            
             signature = hmac.new(
-                api_secret.encode('utf-8'),
+                secret_bytes,
                 message.encode('utf-8'),
                 digestmod=hashlib.sha256
             ).hexdigest()
@@ -121,14 +130,17 @@ class APITester:
                 "CB-ACCESS-KEY": api_key,
                 "CB-ACCESS-SIGN": signature,
                 "CB-ACCESS-TIMESTAMP": timestamp,
-                "CB-VERSION": "2021-01-01"
+                "CB-VERSION": "2021-08-08"  # Updated to newer version
             }
             
             # Make request
             response = requests.get(url, headers=headers)
             
             if response.status_code == 200:
-                return True, "Successfully connected to Coinbase API"
+                # Get user information from response
+                user_data = response.json()
+                user_name = user_data.get('data', {}).get('name', 'User')
+                return True, f"Successfully connected to Coinbase API (User: {user_name})"
             else:
                 return False, f"Coinbase API returned status code {response.status_code}: {response.text}"
         except Exception as e:

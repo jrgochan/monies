@@ -607,6 +607,20 @@ def show_api_troubleshooting():
         2. Check that your API key has the correct permissions (read-only may be enough)
         3. Create a new API key if you suspect the old one is compromised or expired
         4. Use a VPN if your region is restricted (but ensure this doesn't violate terms of service)
+        
+        #### Coinbase-Specific Issues
+        
+        - **API Key Format**: Make sure you're using an API key from Coinbase (not Coinbase Pro/Advanced Trade)
+        - **API Secret Format**: The API secret should be Base64 encoded
+        - **Permissions**: Ensure your API key has the correct permissions (wallet:accounts:read at minimum)
+        - **2FA Requirement**: Coinbase may require additional verification for certain actions
+        
+        **To create a Coinbase API key**:
+        1. Log in to your Coinbase account
+        2. Go to Settings > API > New API Key
+        3. Enable the required permissions (wallet:accounts:read, wallet:transactions:read)
+        4. Complete 2FA verification if prompted
+        5. Copy both the API Key and API Secret
         """)
     
     with st.expander("AI/LLM API Issues"):

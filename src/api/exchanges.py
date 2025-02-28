@@ -5,6 +5,12 @@ import logging
 from typing import Dict, List, Tuple, Optional
 from dotenv import load_dotenv
 import os
+import json
+import hmac
+import hashlib
+import requests
+from urllib.parse import urlencode
+import base64
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +40,12 @@ def get_exchange_client(exchange_name: str, api_key: str, api_secret: str):
             # Test connection
             client.get_account()
             return client
+        elif exchange_name.lower() == "coinbase":
+            # Create a custom Coinbase client
+            client = CoinbaseClient(api_key, api_secret)
+            # Test connection
+            client.get_accounts()
+            return client
         else:
             # Use CCXT for other exchanges
             exchange_class = getattr(ccxt, exchange_name.lower())
@@ -52,6 +64,114 @@ def get_exchange_client(exchange_name: str, api_key: str, api_secret: str):
         else:
             logger.error(f"Error connecting to {exchange_name}: {error_msg}")
         return None
+
+class CoinbaseClient:
+    """
+    Custom Coinbase client to manage API requests
+    """
+    def __init__(self, api_key: str, api_secret: str):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.api_url = "https://api.coinbase.com"
+        self.api_version = "2021-08-08"
+    
+    def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        """Generate signature for Coinbase API request"""
+        message = timestamp + method + request_path + body
+        signature = hmac.new(
+            base64.b64decode(self.api_secret),
+            message.encode('utf-8'),
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        return signature
+    
+    def _request(self, method: str, endpoint: str, params: dict = None, data: dict = None) -> dict:
+        """Make request to Coinbase API"""
+        url = f"{self.api_url}{endpoint}"
+        timestamp = str(int(time.time()))
+        
+        # Add query parameters to URL if provided
+        if params:
+            query_string = urlencode(params)
+            url = f"{url}?{query_string}"
+            endpoint = f"{endpoint}?{query_string}"
+        
+        # Convert data to JSON string if provided
+        body = ""
+        if data:
+            body = json.dumps(data)
+        
+        # Generate signature
+        signature = self._generate_signature(timestamp, method, endpoint, body)
+        
+        # Create headers
+        headers = {
+            "CB-ACCESS-KEY": self.api_key,
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+            "CB-VERSION": self.api_version,
+            "Content-Type": "application/json"
+        }
+        
+        # Make request
+        response = requests.request(method, url, headers=headers, data=body)
+        
+        # Handle errors
+        if response.status_code != 200:
+            error_msg = f"Coinbase API error: {response.status_code}, {response.text}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        return response.json()
+    
+    def get_accounts(self) -> dict:
+        """Get all accounts (used to test connection)"""
+        return self._request("GET", "/v2/accounts")
+    
+    def get_balance(self) -> dict:
+        """Get balance information for all accounts"""
+        accounts = self._request("GET", "/v2/accounts")
+        return accounts
+    
+    def get_spot_price(self, currency_pair: str) -> float:
+        """Get current spot price for a currency pair"""
+        response = self._request("GET", f"/v2/prices/{currency_pair}/spot")
+        return float(response["data"]["amount"])
+    
+    def get_exchange_rates(self, currency: str = "USD") -> dict:
+        """Get exchange rates for a base currency"""
+        response = self._request("GET", f"/v2/exchange-rates", {"currency": currency})
+        return response["data"]["rates"]
+    
+    def place_market_order(self, action: str, amount: str, currency: str) -> dict:
+        """Place a market order to buy or sell"""
+        data = {
+            "type": "market",
+            "side": action,  # 'buy' or 'sell'
+            "product_id": f"{currency}-USD",
+            "size": amount  # Amount in base currency
+        }
+        return self._request("POST", "/v3/brokerage/orders", data=data)
+    
+    def place_limit_order(self, action: str, amount: str, price: str, currency: str) -> dict:
+        """Place a limit order to buy or sell"""
+        data = {
+            "type": "limit",
+            "side": action,  # 'buy' or 'sell'
+            "product_id": f"{currency}-USD",
+            "price": price,
+            "size": amount
+        }
+        return self._request("POST", "/v3/brokerage/orders", data=data)
+    
+    def get_transaction_history(self, account_id: str, limit: int = 50) -> list:
+        """Get transaction history for an account"""
+        transactions = self._request(
+            "GET", 
+            f"/v2/accounts/{account_id}/transactions", 
+            {"limit": limit}
+        )
+        return transactions["data"]
 
 def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dict:
     """
@@ -83,6 +203,36 @@ def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dic
                         'free': free,
                         'locked': locked,
                         'total': total
+                    }
+        elif exchange_name.lower() == "coinbase":
+            client = get_exchange_client("coinbase", api_key, api_secret)
+            if not client:
+                logger.warning("Coinbase access failed. Check your API keys.")
+                return result
+            
+            # Get account info from Coinbase
+            accounts_data = client.get_accounts()
+            
+            # Extract non-zero balances
+            for account in accounts_data['data']:
+                currency = account['balance']['currency']
+                amount = float(account['balance']['amount'])
+                
+                if amount > 0:
+                    # Coinbase doesn't distinguish between free and locked balances in the same way
+                    # We'll use the available balance as free and the difference as locked
+                    # If available amount is not provided, assume all funds are free
+                    if 'available' in account:
+                        available = float(account['available'])
+                        locked = amount - available
+                    else:
+                        available = amount
+                        locked = 0.0
+                    
+                    result[currency] = {
+                        'free': available,
+                        'locked': locked,
+                        'total': amount
                     }
         else:
             # Use CCXT for other exchanges
@@ -144,6 +294,44 @@ def get_current_prices(exchange_name: str, currencies: List[str] = None) -> Dict
                     
                     if currencies is None or base_currency in currencies:
                         result[base_currency] = float(ticker['price'])
+        elif exchange_name.lower() == "coinbase":
+            # Use API key from environment for Coinbase
+            api_key = os.getenv("COINBASE_API_KEY", "")
+            api_secret = os.getenv("COINBASE_SECRET_KEY", "")
+            
+            if api_key and api_secret:
+                # Create client
+                client = CoinbaseClient(api_key, api_secret)
+                
+                # If currencies are specified, get prices for each one
+                if currencies:
+                    for currency in currencies:
+                        try:
+                            # Get spot price
+                            spot_price = client.get_spot_price(f"{currency}-USD")
+                            result[currency] = spot_price
+                        except Exception as e:
+                            logger.warning(f"Could not get price for {currency} from Coinbase: {str(e)}")
+                else:
+                    # Without specific currencies, get exchange rates based on USD
+                    try:
+                        # Using exchange rates for better efficiency when getting multiple prices
+                        rates = client.get_exchange_rates("USD")
+                        
+                        # Convert rates to prices (1/rate for USD base)
+                        for currency, rate in rates.items():
+                            if currency != "USD" and rate != "0":
+                                # We need to invert the rate since we want price in USD
+                                try:
+                                    price = 1 / float(rate)
+                                    result[currency] = price
+                                except (ValueError, ZeroDivisionError):
+                                    # Skip currencies with invalid rates
+                                    pass
+                    except Exception as e:
+                        logger.error(f"Error fetching exchange rates from Coinbase: {str(e)}")
+            else:
+                logger.warning("Coinbase API keys not found in environment variables")
         else:
             # Use CCXT for other exchanges
             exchange_class = getattr(ccxt, exchange_name.lower(), None)
@@ -277,6 +465,58 @@ def place_order(
             result['order_id'] = order['orderId']
             result['message'] = "Order placed successfully"
             
+        elif exchange_name.lower() == "coinbase":
+            # Use Coinbase client
+            client = get_exchange_client("coinbase", api_key, api_secret)
+            if not client:
+                result['message'] = "Failed to connect to Coinbase"
+                return result
+            
+            # Extract currency from symbol (e.g., BTC/USD -> BTC)
+            if '/' in symbol:
+                currency = symbol.split('/')[0]
+            else:
+                # Try to extract currency assuming format like BTCUSD
+                # Most common USD pairs are 3-4 letters followed by USD
+                if symbol.endswith('USD'):
+                    currency = symbol[:-3]
+                else:
+                    result['message'] = f"Invalid symbol format: {symbol}. Expected format: BTC/USD or BTCUSD"
+                    return result
+            
+            # Convert amount to string for Coinbase API
+            amount_str = str(amount)
+            
+            # Place order based on type
+            try:
+                if order_type.lower() == 'market':
+                    order = client.place_market_order(
+                        action=side.lower(),
+                        amount=amount_str,
+                        currency=currency
+                    )
+                elif order_type.lower() == 'limit':
+                    if not price:
+                        result['message'] = "Price is required for limit orders"
+                        return result
+                    
+                    order = client.place_limit_order(
+                        action=side.lower(),
+                        amount=amount_str,
+                        price=str(price),
+                        currency=currency
+                    )
+                else:
+                    result['message'] = f"Unsupported order type: {order_type}"
+                    return result
+                
+                result['success'] = True
+                result['order_id'] = order.get('id', 'unknown')
+                result['message'] = "Order placed successfully"
+            except Exception as e:
+                result['message'] = f"Error placing Coinbase order: {str(e)}"
+                return result
+            
         else:
             # Use CCXT for other exchanges
             exchange = get_exchange_client(exchange_name, api_key, api_secret)
@@ -375,6 +615,101 @@ def get_transaction_history(
                     'fee_currency': trade['commissionAsset'],
                     'timestamp': trade['time']
                 })
+        elif exchange_name.lower() == "coinbase":
+            client = get_exchange_client("coinbase", api_key, api_secret)
+            if not client:
+                return result
+            
+            # For Coinbase, we need to get accounts first, then transactions for each account
+            accounts_data = client.get_accounts()
+            
+            # Process accounts
+            all_transactions = []
+            
+            # Extract currency from symbol if provided
+            target_currency = None
+            if symbol:
+                if '/' in symbol:
+                    target_currency = symbol.split('/')[0]
+                elif symbol.endswith('USD'):
+                    target_currency = symbol[:-3]
+                else:
+                    target_currency = symbol
+            
+            # Get transactions for relevant accounts
+            for account in accounts_data['data']:
+                # If symbol is specified, only get transactions for that currency
+                if target_currency and account['balance']['currency'] != target_currency:
+                    continue
+                
+                # Get transactions for this account
+                try:
+                    account_id = account['id']
+                    account_currency = account['balance']['currency']
+                    
+                    # Get transactions for this account
+                    account_txs = client.get_transaction_history(account_id, limit)
+                    
+                    # Add to all transactions list with currency info
+                    for tx in account_txs:
+                        tx['currency'] = account_currency
+                        all_transactions.append(tx)
+                except Exception as e:
+                    logger.warning(f"Error getting transactions for account {account['id']}: {str(e)}")
+            
+            # Sort all transactions by timestamp (newest first) and apply limit
+            all_transactions.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+            transactions = all_transactions[:limit]
+            
+            # Format transactions to match our standard format
+            for tx in transactions:
+                # Determine transaction side (buy/sell)
+                tx_type = tx.get('type', '')
+                
+                if tx_type == 'buy':
+                    side = 'buy'
+                elif tx_type == 'sell':
+                    side = 'sell'
+                else:
+                    # Handle other transaction types
+                    amount_str = tx.get('amount', {'amount': '0'}).get('amount', '0')
+                    try:
+                        amount_float = float(amount_str)
+                        side = 'buy' if amount_float > 0 else 'sell'
+                    except:
+                        side = 'unknown'
+                
+                # Get amount and currency
+                currency = tx.get('currency', '')
+                amount_str = tx.get('amount', {'amount': '0'}).get('amount', '0')
+                try:
+                    amount = abs(float(amount_str))
+                except:
+                    amount = 0.0
+                
+                # Get price if available
+                native_amount_str = tx.get('native_amount', {'amount': '0'}).get('amount', '0')
+                try:
+                    native_amount = abs(float(native_amount_str))
+                    # Calculate price as native amount / amount
+                    price = native_amount / amount if amount > 0 else 0
+                except:
+                    price = 0.0
+                    native_amount = 0.0
+                
+                # Format for our standard output
+                result.append({
+                    'id': tx.get('id', 'unknown'),
+                    'symbol': f"{currency}/USD",
+                    'side': side,
+                    'amount': amount,
+                    'price': price,
+                    'cost': native_amount,
+                    'fee': 0.0,  # Coinbase doesn't expose fees in transactions API
+                    'fee_currency': 'USD',
+                    'timestamp': tx.get('created_at', '')
+                })
+            
         else:
             # Use CCXT for other exchanges
             exchange = get_exchange_client(exchange_name, api_key, api_secret)
@@ -435,7 +770,7 @@ def get_supported_exchanges():
     """
     Get a list of supported exchanges.
     """
-    # CCXT supported exchanges + special handling for Binance
+    # CCXT supported exchanges + special handling for Binance and Coinbase
     exchanges = ccxt.exchanges
     
     # Make sure Binance is in the list (we have special handling for it)
@@ -445,6 +780,10 @@ def get_supported_exchanges():
     # Add Binance.US explicitly for users in restricted regions
     if 'binanceus' not in exchanges:
         exchanges.append('binanceus')
+    
+    # Add Coinbase explicitly (we have custom implementation)
+    if 'coinbase' not in exchanges:
+        exchanges.append('coinbase')
     
     return sorted(exchanges)
 
