@@ -611,6 +611,7 @@ def show_api_troubleshooting():
         #### Coinbase-Specific Issues
         
         - **API Key Format**: Make sure you're using an API key from Coinbase (not Coinbase Pro/Advanced Trade)
+        - **CDP API Keys**: We support Coinbase Developer Platform API keys that include organization IDs (format: organization_id:api_key)
         - **API Secret Format**: The API secret should be Base64 encoded
         - **Permissions**: Ensure your API key has the correct permissions (wallet:accounts:read at minimum)
         - **2FA Requirement**: Coinbase may require additional verification for certain actions
@@ -621,6 +622,13 @@ def show_api_troubleshooting():
         3. Enable the required permissions (wallet:accounts:read, wallet:transactions:read)
         4. Complete 2FA verification if prompted
         5. Copy both the API Key and API Secret
+        
+        **To create a Coinbase Developer Platform (CDP) API key**:
+        1. Log in to your Coinbase Developer account at developer.coinbase.com
+        2. Go to My Apps > Create New API Key
+        3. Select the permissions required for your application
+        4. Note the API key format with organization ID (organization_id:api_key)
+        5. You can use this key directly - our app will handle the organization ID automatically
         """)
     
     with st.expander("AI/LLM API Issues"):

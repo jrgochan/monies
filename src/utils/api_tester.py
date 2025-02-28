@@ -103,6 +103,15 @@ class APITester:
             import time
             import base64
             
+            # Handle CDP API keys (keys containing organization ID)
+            organization_id = None
+            if ':' in api_key:
+                # Format is typically: organization_id:api_key
+                parts = api_key.split(':')
+                if len(parts) == 2:
+                    organization_id = parts[0]
+                    api_key = parts[1]
+            
             # Coinbase API endpoint for testing
             url = "https://api.coinbase.com/v2/user"
             
@@ -132,6 +141,10 @@ class APITester:
                 "CB-ACCESS-TIMESTAMP": timestamp,
                 "CB-VERSION": "2021-08-08"  # Updated to newer version
             }
+            
+            # Add organization ID if present (for CDP API keys)
+            if organization_id:
+                headers["CB-ACCESS-PROJECT"] = organization_id
             
             # Make request
             response = requests.get(url, headers=headers)

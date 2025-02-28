@@ -70,7 +70,21 @@ class CoinbaseClient:
     Custom Coinbase client to manage API requests
     """
     def __init__(self, api_key: str, api_secret: str):
-        self.api_key = api_key
+        # Handle CDP API keys (keys containing organization ID)
+        if ':' in api_key:
+            # Format is typically: organization_id:api_key
+            parts = api_key.split(':')
+            if len(parts) == 2:
+                self.organization_id = parts[0]
+                self.api_key = parts[1]
+            else:
+                # If format is unexpected, use as-is
+                self.organization_id = None
+                self.api_key = api_key
+        else:
+            self.organization_id = None
+            self.api_key = api_key
+            
         self.api_secret = api_secret
         self.api_url = "https://api.coinbase.com"
         self.api_version = "2021-08-08"
@@ -112,6 +126,10 @@ class CoinbaseClient:
             "CB-VERSION": self.api_version,
             "Content-Type": "application/json"
         }
+        
+        # Add organization ID if present (for CDP API keys)
+        if self.organization_id:
+            headers["CB-ACCESS-PROJECT"] = self.organization_id
         
         # Make request
         response = requests.request(method, url, headers=headers, data=body)

@@ -161,12 +161,18 @@ def show_add_wallet_form(user_id):
         with st.form("add_wallet_form"):
             st.write("Add a new wallet or exchange account")
             
-            name = st.text_input("Wallet Name", placeholder="My Binance Account")
+            name = st.text_input("Wallet Name", placeholder="My Wallet")
             
             wallet_type = st.selectbox(
                 "Wallet Type",
-                options=["exchange", "on-chain"],
-                format_func=lambda x: "Exchange Account" if x == "exchange" else "On-chain Wallet"
+                options=["exchange", "on-chain", "hardware", "mobile", "browser"],
+                format_func=lambda x: {
+                    "exchange": "Exchange Account",
+                    "on-chain": "On-chain Wallet",
+                    "hardware": "Hardware Wallet",
+                    "mobile": "Mobile Wallet",
+                    "browser": "Browser Wallet"
+                }.get(x, x.capitalize())
             )
             
             if wallet_type == "exchange":
@@ -196,7 +202,38 @@ def show_add_wallet_form(user_id):
                 api_secret = st.text_input("API Secret", type="password")
                 
                 address = None
+            elif wallet_type in ["hardware", "mobile", "browser"]:
+                exchange = None
+                api_key = None
+                api_secret = None
+                
+                wallet_provider = ""
+                if wallet_type == "hardware":
+                    wallet_provider = st.selectbox(
+                        "Hardware Wallet Provider",
+                        options=["Ledger", "Trezor", "KeepKey", "SafePal", "Coldcard", "BitBox", "Ellipal", "Other"]
+                    )
+                elif wallet_type == "mobile":
+                    wallet_provider = st.selectbox(
+                        "Mobile Wallet Provider",
+                        options=["Metamask", "Trust Wallet", "Exodus", "Coinbase Wallet", "Blockchain.com", "Argent", "Binance Wallet", "Rainbow", "Other"]
+                    )
+                elif wallet_type == "browser":
+                    wallet_provider = st.selectbox(
+                        "Browser Wallet Provider",
+                        options=["Metamask", "Brave Wallet", "Coinbase Wallet", "Phantom", "WalletConnect", "Exodus", "Rabby", "Other"]
+                    )
+                
+                if wallet_provider == "Other":
+                    wallet_provider = st.text_input("Specify Provider", placeholder="Wallet Provider Name")
+                
+                address = st.text_input("Wallet Address", placeholder="0x...")
+                st.info("Enter the public address for this wallet. This allows you to track balance and transactions.")
+                
+                # Add a note about wallet provider
+                name = f"{name} ({wallet_provider})" if name and wallet_provider else name or wallet_provider
             else:
+                # Original on-chain wallet
                 exchange = None
                 api_key = None
                 api_secret = None
@@ -214,8 +251,8 @@ def show_add_wallet_form(user_id):
                     st.error("API Key and Secret are required for exchange accounts")
                     return
                 
-                if wallet_type == "on-chain" and not address:
-                    st.error("Wallet address is required for on-chain wallets")
+                if wallet_type in ["on-chain", "hardware", "mobile", "browser"] and not address:
+                    st.error("Wallet address is required for this wallet type")
                     return
                 
                 # Add wallet
@@ -250,6 +287,15 @@ def show_wallet_card(wallet, user_id, prices=None):
             st.subheader(wallet.name)
             if wallet.wallet_type == "exchange":
                 st.caption(f"Exchange: {wallet.exchange}")
+            elif wallet.wallet_type in ["on-chain", "hardware", "mobile", "browser"]:
+                wallet_type_display = {
+                    "on-chain": "On-chain Wallet",
+                    "hardware": "Hardware Wallet",
+                    "mobile": "Mobile Wallet",
+                    "browser": "Browser Wallet"
+                }.get(wallet.wallet_type, wallet.wallet_type)
+                
+                st.caption(f"{wallet_type_display}: {wallet.address[:10]}...{wallet.address[-6:]}")
             else:
                 st.caption(f"Address: {wallet.address[:10]}...{wallet.address[-6:]}")
         
@@ -461,7 +507,44 @@ def show_wallet_card(wallet, user_id, prices=None):
                                     st.experimental_rerun()
                 
                 else:
-                    # For on-chain wallets, show the address
+                    # For wallet types with addresses, show QR code and address
+                    wallet_type_display = ""
+                    wallet_specific_instructions = ""
+                    
+                    if wallet.wallet_type == "hardware":
+                        wallet_type_display = "Hardware Wallet"
+                        wallet_specific_instructions = """
+                        To receive funds to your hardware wallet:
+                        1. Connect your hardware wallet to your computer
+                        2. Open the associated wallet app (Ledger Live, Trezor Suite, etc.)
+                        3. Follow the instructions to generate a receive address
+                        4. Verify the address matches what's shown below
+                        """
+                    elif wallet.wallet_type == "mobile":
+                        wallet_type_display = "Mobile Wallet"
+                        wallet_specific_instructions = """
+                        To receive funds to your mobile wallet:
+                        1. Open your wallet app
+                        2. Go to the Receive section
+                        3. Verify the address matches what's shown below
+                        """
+                    elif wallet.wallet_type == "browser":
+                        wallet_type_display = "Browser Wallet"
+                        wallet_specific_instructions = """
+                        To receive funds to your browser wallet:
+                        1. Open your browser extension
+                        2. Copy your wallet address
+                        3. Verify it matches what's shown below
+                        """
+                    else:
+                        wallet_type_display = "On-chain Wallet"
+                    
+                    # Show wallet specific instructions if available
+                    if wallet_specific_instructions:
+                        with st.expander(f"How to receive with your {wallet_type_display}"):
+                            st.write(wallet_specific_instructions)
+                    
+                    # Show address and QR code for all wallet types with addresses
                     st.info("Send funds to this address:")
                     st.code(wallet.address)
                     
