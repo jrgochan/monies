@@ -22,9 +22,11 @@ def sidebar_navigation():
         "Settings": "⚙️",
     }
 
-    # Create the radio buttons for navigation
+    # Simple default navigation - safest option
     page = st.sidebar.radio(
-        "Go to", list(pages.keys()), format_func=lambda x: f"{pages[x]} {x}"
+        "Go to",
+        list(pages.keys()),
+        format_func=lambda x: f"{pages[x]} {x}",
     )
 
     # Add logout button if user is logged in
