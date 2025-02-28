@@ -1,3 +1,12 @@
+"""Social media integration page for connecting and posting to social media platforms.
+
+This module handles:
+- Connecting social media accounts
+- Creating and scheduling posts
+- Managing scheduled posts
+- Analyzing social media sentiment
+"""
+
 import base64
 import os
 import tempfile
@@ -23,9 +32,12 @@ from src.models.database import ScheduledPost, SessionLocal, SocialAccount
 from src.utils.auth import require_login
 from src.utils.security import get_api_key, store_api_key
 
+# Rename this module to avoid conflicts with src.api.social_media
+# This file should be imported as src.pages.social_media_page
+
 
 def get_user_social_accounts(user_id):
-    """Get all social media accounts for a user"""
+    """Get all social media accounts for a user."""
     db = SessionLocal()
     try:
         accounts = (
@@ -37,7 +49,7 @@ def get_user_social_accounts(user_id):
 
 
 def add_social_account(user_id, platform, username, token, token_secret=None):
-    """Add a new social media account for a user"""
+    """Add a new social media account for a user."""
     db = SessionLocal()
     try:
         # Check if account already exists
@@ -79,7 +91,7 @@ def add_social_account(user_id, platform, username, token, token_secret=None):
 
 
 def delete_social_account(account_id):
-    """Delete a social media account"""
+    """Delete a social media account."""
     db = SessionLocal()
     try:
         db.query(SocialAccount).filter(SocialAccount.id == account_id).delete()
@@ -94,7 +106,7 @@ def delete_social_account(account_id):
 
 
 def show_accounts_section(user_id):
-    """Show social media accounts section"""
+    """Show social media accounts section."""
     st.subheader("Connected Accounts")
 
     # Get user's social accounts
@@ -248,7 +260,7 @@ def show_accounts_section(user_id):
 
 
 def show_post_section(user_id):
-    """Show post creation and scheduling section"""
+    """Show post creation and scheduling section."""
     st.subheader("Create Post")
 
     # Get user's social accounts
@@ -553,7 +565,7 @@ def show_post_section(user_id):
 
 
 def show_scheduled_posts(user_id):
-    """Show scheduled posts section"""
+    """Show scheduled posts section."""
     st.subheader("Scheduled Posts")
 
     # Get scheduled posts
@@ -602,7 +614,7 @@ def show_scheduled_posts(user_id):
 
 
 def show_sentiment_analysis():
-    """Show sentiment analysis section"""
+    """Show sentiment analysis section."""
     st.subheader("Social Media Sentiment Analysis")
 
     # Input for topic to analyze
@@ -728,7 +740,7 @@ def show_sentiment_analysis():
 
 
 def show_social_media():
-    """Display the Social Media page"""
+    """Display the Social Media page."""
     # Require login
     user = require_login()
 
