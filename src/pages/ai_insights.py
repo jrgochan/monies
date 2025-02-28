@@ -13,9 +13,13 @@ from src.models.database import SessionLocal, AiAnalysis
 from src.api.ai_analysis import (
     analyze_stock_trend,
     analyze_crypto_trend,
-    get_etf_recommendations,
-    analyze_with_openai,
-    analyze_with_ollama
+    get_etf_recommendations
+)
+from src.utils.ai_helpers import (
+    analyze_finance_data,
+    analyze_general_query,
+    analyze_code,
+    get_ai_model_info
 )
 
 def cache_analysis(query, result, model_used, expiry_hours=24):
@@ -517,12 +521,51 @@ def show_custom_analysis():
         placeholder="Example: What's the relationship between Bitcoin price and tech stocks? Or: Analyze the impact of recent inflation data on growth stocks."
     )
     
-    # Model selection
-    model = st.radio(
-        "Analysis Model",
-        options=["OpenAI (GPT)", "Ollama (Local)"],
-        horizontal=True
-    )
+    # Task type selection (for model selection)
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Model selection
+        model_type = st.radio(
+            "Analysis Model",
+            options=["OpenAI (GPT)", "Ollama (Local)"],
+            horizontal=True
+        )
+    
+    with col2:
+        # Analysis topic selection to help choose the right model
+        task_type = st.radio(
+            "Analysis Topic",
+            options=["Finance", "General", "Coding"],
+            index=0,
+            horizontal=True
+        )
+    
+    # Get available AI models info
+    ai_info = get_ai_model_info()
+    
+    # Get available Ollama models if using Ollama
+    if model_type == "Ollama (Local)":
+        # Show Ollama connection info
+        st.info(f"Ollama URL: {ai_info['ollama']['url']}")
+        
+        if ai_info['ollama']['available']:
+            # Show available models and let user select one
+            specific_model = st.selectbox(
+                "Choose Ollama Model (optional)",
+                options=["Auto-select best model"] + ai_info['ollama']['models'],
+                index=0,
+                help="Auto-select will choose the best model based on your task"
+            )
+            
+            # Show which models are preferred for this task type
+            preferred_models = ai_info['ollama']['model_preferences'].get(task_type.lower(), [])
+            if preferred_models:
+                st.caption(f"For {task_type.lower()} analysis, preferred models (in order): {', '.join(preferred_models[:3])}")
+        else:
+            # Show warning if no models found
+            st.warning(f"No Ollama models found at {ai_info['ollama']['url']}. Make sure Ollama is running and accessible.")
+            specific_model = "Auto-select best model"
     
     if st.button("Analyze", key="custom_analysis"):
         if not query:
@@ -530,22 +573,50 @@ def show_custom_analysis():
             return
         
         # Check cache first
-        cache_key = f"custom_{hash(query)}"
+        cache_key = f"custom_{hash(query)}_{task_type.lower()}"
         cached_result, cached_model = get_cached_analysis(cache_key)
         
         if cached_result:
             st.success(f"Using cached analysis (via {cached_model})")
             result = cached_result
+            used_model = cached_model
         else:
             # Run new analysis
             with st.spinner("Analyzing..."):
                 try:
-                    if model == "OpenAI (GPT)":
-                        result = analyze_with_openai(query)
-                        model_name = "OpenAI"
+                    task = task_type.lower()
+                    
+                    # Choose analysis function based on task type
+                    if task == "finance":
+                        analysis_fn = analyze_finance_data
+                    elif task == "coding":
+                        analysis_fn = analyze_code
                     else:
-                        result = analyze_with_ollama(query)
-                        model_name = "Ollama"
+                        analysis_fn = analyze_general_query
+                    
+                    if model_type == "OpenAI (GPT)":
+                        # Use OpenAI (through our helper which selects the best model)
+                        from src.api.ai_analysis import analyze_with_openai
+                        openai_model = "gpt-4" if ai_info['openai']['models'] and "gpt-4" in ai_info['openai']['models'] else "gpt-3.5-turbo"
+                        result = analyze_with_openai(query, model=openai_model, task_type=task)
+                        model_name = f"OpenAI ({openai_model})"
+                    else:
+                        # For Ollama, use specific model if selected, otherwise use the appropriate analysis function
+                        if specific_model == "Auto-select best model":
+                            result = analysis_fn(query)
+                            # Get the best model for display
+                            try:
+                                best_model = select_best_ollama_model(task)
+                                model_name = f"Ollama ({best_model})"
+                            except Exception:
+                                model_name = "Ollama (auto-selected model)"
+                        else:
+                            # Use the specific model selected by the user
+                            from src.api.ai_analysis import analyze_with_ollama
+                            result = analyze_with_ollama(query, model=specific_model, task_type=task)
+                            model_name = f"Ollama ({specific_model})"
+                    
+                    used_model = model_name
                     
                     # Cache the result (ignore errors)
                     try:
@@ -554,9 +625,10 @@ def show_custom_analysis():
                         st.warning(f"Could not cache result: {str(e)}")
                 except Exception as e:
                     result = f"Error in analysis: {str(e)}"
+                    used_model = "Error"
         
         # Display result
-        st.subheader("Analysis Result")
+        st.subheader(f"Analysis Result (via {used_model})")
         st.markdown(result)
 
 def show_ai_insights():

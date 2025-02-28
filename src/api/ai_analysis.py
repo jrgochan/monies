@@ -32,17 +32,106 @@ try:
 except Exception as e:
     logger.warning(f"Could not initialize OpenAI client: {str(e)}")
 
-# Ollama settings
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama2")
+# AI model settings
+from src.utils.api_config import APIConfigManager
 
-def analyze_with_openai(prompt: str, model: str = "gpt-3.5-turbo") -> str:
+def get_ollama_settings():
+    """
+    Get Ollama settings from the API config manager
+    """
+    # Get the base URL from the environment variable through API config
+    base_url = APIConfigManager.get_api_value_from_env("OLLAMA_BASE_URL")
+    # Use default if not configured
+    if not base_url:
+        base_url = "http://localhost:11434"
+    
+    # Ensure base URL ends with a slash
+    if not base_url.endswith('/'):
+        base_url += '/'
+    
+    # Get default model from environment variable
+    default_model = os.getenv("OLLAMA_MODEL", "llama2")
+    
+    return base_url, default_model
+
+def get_available_ollama_models():
+    """
+    Get available models from Ollama instance
+    """
+    base_url, _ = get_ollama_settings()
+    
+    try:
+        response = requests.get(f"{base_url}api/tags")
+        if response.status_code == 200:
+            data = response.json()
+            if 'models' in data:
+                return [model['name'] for model in data['models']]
+            else:
+                logger.warning("No models found in Ollama response")
+                return []
+        else:
+            logger.error(f"Failed to get Ollama models: {response.status_code}")
+            return []
+    except Exception as e:
+        logger.error(f"Error fetching Ollama models: {str(e)}")
+        return []
+
+def select_best_ollama_model(task_type: str = "general"):
+    """
+    Select the best Ollama model for a given task type
+    
+    Args:
+        task_type: Type of task ("finance", "general", "coding", etc.)
+    
+    Returns:
+        Best model name for the task
+    """
+    # Get available models
+    available_models = get_available_ollama_models()
+    
+    if not available_models:
+        return os.getenv("OLLAMA_MODEL", "llama2")
+    
+    # Model preferences by task type
+    model_preferences = {
+        "finance": [
+            "mistral-medium", "mixtral", "llama3", "llama3:70b", "llama3:8b", 
+            "mistral", "codellama", "llama2:70b", "llama2"
+        ],
+        "general": [
+            "llama3", "llama3:70b", "llama3:8b", "mistral", "mistral-medium", 
+            "mixtral", "llama2:70b", "llama2"
+        ],
+        "coding": [
+            "codellama", "llama3", "llama3:70b", "mixtral", "mistral-medium", 
+            "mistral", "llama2:70b", "llama2"
+        ]
+    }
+    
+    # Use general preferences if task type not found
+    preferences = model_preferences.get(task_type, model_preferences["general"])
+    
+    # Find the first available preferred model
+    for model in preferences:
+        for available_model in available_models:
+            # Check for exact match or if the model name starts with the preference
+            # (handles cases like llama3 matching llama3:8b, etc.)
+            if available_model == model or available_model.startswith(f"{model}:"):
+                logger.info(f"Selected Ollama model {available_model} for {task_type} task")
+                return available_model
+    
+    # If no preferred models are available, use the first available model
+    logger.info(f"No preferred model available for {task_type}. Using {available_models[0]}")
+    return available_models[0]
+
+def analyze_with_openai(prompt: str, model: str = "gpt-3.5-turbo", task_type: str = "general") -> str:
     """
     Analyze data using OpenAI API.
     
     Args:
         prompt: The prompt to send to OpenAI
         model: The model to use
+        task_type: Type of task for system prompt customization
         
     Returns:
         Analysis result as a string
@@ -50,11 +139,18 @@ def analyze_with_openai(prompt: str, model: str = "gpt-3.5-turbo") -> str:
     try:
         if not client:
             raise ValueError("OpenAI client not initialized")
+        
+        # Customize system prompt based on task type
+        system_prompt = "You are a helpful AI assistant."
+        if task_type == "finance":
+            system_prompt = "You are a financial analyst providing insights on market data."
+        elif task_type == "coding":
+            system_prompt = "You are a programming expert helping with code analysis and development."
             
         completion = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You are a financial analyst providing insights on market data."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=1000
@@ -65,32 +161,48 @@ def analyze_with_openai(prompt: str, model: str = "gpt-3.5-turbo") -> str:
         logger.error(f"Error with OpenAI analysis: {str(e)}")
         raise
 
-def analyze_with_ollama(prompt: str, model: str = None) -> str:
+def analyze_with_ollama(prompt: str, model: str = None, task_type: str = "general") -> str:
     """
     Analyze data using Ollama locally hosted model.
     
     Args:
         prompt: The prompt to send to Ollama
-        model: The model to use (defaults to environment variable or llama2)
+        model: The model to use (if None, selects best model for task)
+        task_type: Type of task ("finance", "general", "coding", etc.)
         
     Returns:
         Analysis result as a string
     """
+    base_url, default_model = get_ollama_settings()
+    
+    # If no model specified, select the best model for the task
     if model is None:
-        model = OLLAMA_MODEL
+        try:
+            model = select_best_ollama_model(task_type)
+        except Exception as e:
+            logger.warning(f"Failed to select best model: {str(e)}. Using default.")
+            model = default_model
+    
+    # Customize system prompt based on task type
+    system_prompt = ""
+    if task_type == "finance":
+        system_prompt = "You are a financial analyst providing insights on market data. Be concise and factual."
+    elif task_type == "coding":
+        system_prompt = "You are a programming expert helping with code analysis and development."
         
+    # Add system prompt if provided and if model supports it
+    final_prompt = prompt
+    if system_prompt:
+        final_prompt = f"{system_prompt}\n\n{prompt}"
+    
     try:
-        # Ensure base URL ends with a slash
-        base_url = OLLAMA_BASE_URL
-        if not base_url.endswith('/'):
-            base_url += '/'
-            
         # Make API call to Ollama
         response = requests.post(
             f"{base_url}api/generate",
             json={
                 "model": model,
-                "prompt": prompt,
+                "prompt": final_prompt,
+                "system": system_prompt,  # Some models support system parameter
                 "stream": False
             }
         )
@@ -1083,10 +1195,10 @@ def get_etf_recommendations(risk_profile: str = "moderate", sectors: List[str] =
             """
             
             try:
-                result['analysis'] = analyze_with_openai(prompt)
+                result['analysis'] = analyze_with_openai(prompt, task_type="finance")
             except Exception as e:
                 try:
-                    result['analysis'] = analyze_with_ollama(prompt)
+                    result['analysis'] = analyze_with_ollama(prompt, task_type="finance")
                 except:
                     result['analysis'] = f"These ETFs are tailored for {risk_profile} investors, providing a balanced approach to market exposure. Consider individual research before investing."
             
@@ -1098,6 +1210,41 @@ def get_etf_recommendations(risk_profile: str = "moderate", sectors: List[str] =
     
     return result
 
+def analyze_with_best_model(prompt: str, task_type: str = "finance", fallback_message: str = None) -> str:
+    """
+    Use the best available model to perform analysis based on task type
+    
+    Args:
+        prompt: The analysis prompt
+        task_type: Type of task (finance, general, coding)
+        fallback_message: Optional fallback message if all models fail
+        
+    Returns:
+        Analysis result
+    """
+    # First try OpenAI
+    try:
+        # For finance tasks, try to use GPT-4 if the API key exists
+        openai_model = "gpt-3.5-turbo"
+        if task_type == "finance" and os.getenv("OPENAI_API_KEY"):
+            openai_model = "gpt-4" if "gpt-4" in os.getenv("OPENAI_API_KEY", "") else "gpt-3.5-turbo"
+        
+        return analyze_with_openai(prompt, model=openai_model, task_type=task_type)
+    except Exception as e:
+        logger.warning(f"OpenAI analysis failed, trying Ollama: {str(e)}")
+        
+        # Fall back to Ollama with automatic model selection
+        try:
+            return analyze_with_ollama(prompt, model=None, task_type=task_type)
+        except Exception as e2:
+            logger.error(f"All AI analysis methods failed: {str(e2)}")
+            
+            # Use fallback message or generate a generic one
+            if fallback_message:
+                return fallback_message
+            return "Analysis could not be generated at this time. Please try again later."
+
 def generate_generic_analysis(prompt: str) -> str:
     """Generate a generic analysis when AI systems fail"""
-    return "Analysis could not be generated at this time. Please try again later."
+    return analyze_with_best_model(prompt, task_type="general", 
+                                   fallback_message="Analysis could not be generated at this time. Please try again later.")
