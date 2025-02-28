@@ -1,0 +1,19 @@
+[Unit]
+Description=Monies Streamlit Application
+After=network.target
+Wants=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/html/monies
+ExecStart=/usr/local/bin/streamlit run app.py --server.port=8501 --server.baseUrlPath=/monies
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=monies-app
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
