@@ -1,3 +1,5 @@
+"""Portfolio optimization utilities for the Monies application."""
+
 import json
 import logging
 
@@ -26,9 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class PortfolioOptimizer:
-    """
-    A utility class for portfolio optimization calculations and caching
-    """
+    """A utility class for portfolio optimization calculations and caching."""
 
     @staticmethod
     def get_etf_price_history(
@@ -39,8 +39,7 @@ class PortfolioOptimizer:
         cache_duration_hours: int = 24,
         prefer_live_data: bool = True,
     ) -> pd.Series:
-        """
-        Get historical price data for an ETF, with caching support
+        """Get historical price data for an ETF, with caching support.
 
         Args:
             db: Database session
@@ -112,9 +111,17 @@ class PortfolioOptimizer:
                     # Make sure we have a format that can be properly serialized without tuple issues
                     serializable_df = serializable_df.reset_index()
                     if "Date" in serializable_df.columns:
+                        # Convert datetime to string to avoid tuple serialization issues
                         serializable_df["Date"] = serializable_df["Date"].dt.strftime(
                             "%Y-%m-%d"
                         )
+
+                    # Convert all pandas.Timestamp objects in the DataFrame to strings
+                    for col in serializable_df.columns:
+                        if pd.api.types.is_datetime64_any_dtype(serializable_df[col]):
+                            serializable_df[col] = serializable_df[col].dt.strftime(
+                                "%Y-%m-%d"
+                            )
 
                     success = MarketDataCache.cache_data(
                         db=db,
@@ -154,7 +161,8 @@ class PortfolioOptimizer:
 
                         # Build Alpha Vantage API request
                         url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={symbol}&outputsize={outputsize}&apikey={ALPHA_VANTAGE_KEY}"
-                        response = requests.get(url)
+                        # Added timeout to avoid hanging on API requests
+                        response = requests.get(url, timeout=15)
 
                         if response.status_code != 200:
                             raise ValueError(
@@ -211,12 +219,25 @@ class PortfolioOptimizer:
 
                         # Cache the data
                         if use_cache:
+                            # Prepare data for caching - fix datetime serialization issues
+                            alpha_df_copy = alpha_df.copy()
+                            alpha_df_copy = alpha_df_copy.reset_index()
+
+                            # Convert all datetime columns to strings
+                            for col in alpha_df_copy.columns:
+                                if pd.api.types.is_datetime64_any_dtype(
+                                    alpha_df_copy[col]
+                                ):
+                                    alpha_df_copy[col] = alpha_df_copy[col].dt.strftime(
+                                        "%Y-%m-%d"
+                                    )
+
                             MarketDataCache.cache_data(
                                 db=db,
                                 symbol=symbol,
                                 data_type="price_history",
                                 time_period=lookback_period,
-                                data=alpha_df,
+                                data=alpha_df_copy,
                                 data_source="alpha_vantage",
                                 cache_duration_hours=cache_duration_hours,
                             )
@@ -267,12 +288,31 @@ class PortfolioOptimizer:
 
                     # Cache the data if it was successfully fetched
                     if use_cache:
+                        # Fix issue with to_dict() and tuples - convert DatetimeIndex properly
+                        serializable_df = df.copy()
+                        # Make sure we have a format that can be properly serialized without tuple issues
+                        serializable_df = serializable_df.reset_index()
+                        if "Date" in serializable_df.columns:
+                            # Convert datetime to string to avoid tuple serialization issues
+                            serializable_df["Date"] = serializable_df[
+                                "Date"
+                            ].dt.strftime("%Y-%m-%d")
+
+                        # Convert all pandas.Timestamp objects in the DataFrame to strings
+                        for col in serializable_df.columns:
+                            if pd.api.types.is_datetime64_any_dtype(
+                                serializable_df[col]
+                            ):
+                                serializable_df[col] = serializable_df[col].dt.strftime(
+                                    "%Y-%m-%d"
+                                )
+
                         MarketDataCache.cache_data(
                             db=db,
                             symbol=symbol,
                             data_type="price_history",
                             time_period=lookback_period,
-                            data=df,
+                            data=serializable_df,
                             data_source="yahoo_finance",
                             cache_duration_hours=cache_duration_hours,
                         )
@@ -304,7 +344,8 @@ class PortfolioOptimizer:
                         # Free tier of FMP
                         url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{symbol}?from={start_str}&to={end_str}"
 
-                        response = requests.get(url)
+                        # Added timeout to avoid hanging on API requests
+                        response = requests.get(url, timeout=15)
                         if response.status_code != 200:
                             raise ValueError(
                                 f"FMP API returned status code {response.status_code}"
@@ -339,12 +380,26 @@ class PortfolioOptimizer:
 
                         # Cache the data
                         if use_cache:
+                            # Fix issue with to_dict() and tuples - convert DatetimeIndex properly
+                            serializable_df = fmp_df.copy()
+                            # Make sure we have a format that can be properly serialized without tuple issues
+                            serializable_df = serializable_df.reset_index()
+
+                            # Convert all datetime columns to strings
+                            for col in serializable_df.columns:
+                                if pd.api.types.is_datetime64_any_dtype(
+                                    serializable_df[col]
+                                ):
+                                    serializable_df[col] = serializable_df[
+                                        col
+                                    ].dt.strftime("%Y-%m-%d")
+
                             MarketDataCache.cache_data(
                                 db=db,
                                 symbol=symbol,
                                 data_type="price_history",
                                 time_period=lookback_period,
-                                data=fmp_df,
+                                data=serializable_df,
                                 data_source="fmp",
                                 cache_duration_hours=cache_duration_hours,
                             )
@@ -417,7 +472,7 @@ class PortfolioOptimizer:
 
     @staticmethod
     def convert_period_to_days(period: str) -> int:
-        """Convert lookback period string to days"""
+        """Convert lookback period string to days."""
         if period.endswith("y"):
             return int(period[:-1]) * 365
         elif period.endswith("mo"):
@@ -434,8 +489,7 @@ class PortfolioOptimizer:
     def calculate_optimal_weights(
         etfs_data: Dict[str, pd.Series], method: str = "Maximum Sharpe Ratio"
     ) -> Dict[str, float]:
-        """
-        Calculate optimal portfolio weights based on historical data
+        """Calculate optimal portfolio weights based on historical data.
 
         Args:
             etfs_data: Dictionary mapping ETF symbols to price series
@@ -569,8 +623,7 @@ class PortfolioOptimizer:
     def calculate_portfolio_metrics(
         etfs_data: Dict[str, pd.Series], weights: Dict[str, float]
     ) -> Dict[str, Dict[str, Union[float, str]]]:
-        """
-        Calculate performance metrics for ETFs and the optimized portfolio
+        """Calculate performance metrics for ETFs and the optimized portfolio.
 
         Args:
             etfs_data: Dictionary mapping ETF symbols to price series
@@ -849,8 +902,7 @@ class PortfolioOptimizer:
     def calculate_portfolio_performance(
         etfs_data: Dict[str, pd.Series], weights: Dict[str, float]
     ) -> pd.Series:
-        """
-        Calculate the combined portfolio performance
+        """Calculate the combined portfolio performance.
 
         Args:
             etfs_data: Dictionary mapping ETF symbols to price series
@@ -1019,8 +1071,7 @@ class PortfolioOptimizer:
         analysis_text: Optional[str] = None,
         user_id: Optional[int] = None,
     ) -> int:
-        """
-        Save portfolio optimization results to the database
+        """Save portfolio optimization results to the database.
 
         Args:
             db: Database session
@@ -1069,8 +1120,7 @@ class PortfolioOptimizer:
 
     @staticmethod
     def get_optimization_result(db: Session, optimization_id: int) -> Optional[Dict]:
-        """
-        Retrieve a saved optimization result
+        """Retrieve a saved optimization result.
 
         Args:
             db: Database session
@@ -1124,8 +1174,7 @@ class PortfolioOptimizer:
         save_result: bool = True,
         user_id: Optional[int] = None,
     ) -> Dict:
-        """
-        Complete portfolio optimization workflow
+        """Complete portfolio optimization workflow.
 
         Args:
             base_etf: Base ETF symbol

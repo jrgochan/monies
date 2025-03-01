@@ -1,3 +1,5 @@
+"""Utility for caching market data to reduce API calls and improve performance."""
+
 import json
 import logging
 from datetime import datetime, timedelta
@@ -14,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class MarketDataCache:
-    """
-    A utility class for caching market data to reduce API calls and improve performance.
+    """A utility class for caching market data to reduce API calls and improve performance.
+
     This is used to cache stock/ETF/crypto data from external sources.
     """
 
@@ -111,22 +113,58 @@ class MarketDataCache:
             try:
                 # Check the format of the cached data
                 if "has_datetime_index" in data and data["has_datetime_index"]:
-                    # Handle the new datetime-preserving format
-                    if "index_values" in data:
-                        # Reconstruct with timestamp values
+                    # Handle the updated datetime-preserving format
+                    if "index_column" in data:
+                        # Use the stored index column
                         df = pd.DataFrame(data["prices"])
-                        # Convert int64 timestamps back to datetime index
-                        datetime_index = pd.to_datetime(data["index_values"], unit="ns")
-                        df.index = datetime_index
-                        return df
+                        index_col = data["index_column"]
+                        if index_col in df.columns:
+                            # Convert the index column back to datetime if it's a date string
+                            try:
+                                df[index_col] = pd.to_datetime(df[index_col])
+                                df.set_index(index_col, inplace=True)
+                                return df
+                            except Exception as e:
+                                # If conversion fails, still use the column as index
+                                logger.warning(
+                                    f"Could not convert index column to datetime: {str(e)}"
+                                )
+                                df.set_index(index_col, inplace=True)
+                                return df
+
+                    # Backward compatibility with old formats
+                    elif "index_values" in data:
+                        # Reconstruct with timestamp values (old format)
+                        try:
+                            df = pd.DataFrame(data["prices"])
+                            # Convert int64 timestamps back to datetime index
+                            datetime_index = pd.to_datetime(
+                                data["index_values"], unit="ns"
+                            )
+                            df.index = datetime_index
+                            return df
+                        except Exception as e:
+                            # Fall back to default handling if conversion fails
+                            logger.warning(
+                                f"Failed to convert old index_values format: {str(e)}"
+                            )
+                            # Continue to other methods
                     elif "date_column" in data:
-                        # Use the stored date column
+                        # Use the stored date column (old format)
                         df = pd.DataFrame(data["prices"])
                         date_col = data["date_column"]
                         if date_col in df.columns:
-                            df[date_col] = pd.to_datetime(df[date_col])
-                            df.set_index(date_col, inplace=True)
-                            return df
+                            try:
+                                df[date_col] = pd.to_datetime(df[date_col])
+                                df.set_index(date_col, inplace=True)
+                                return df
+                            except Exception as e:
+                                # If conversion fails, still use the column as index
+                                logger.warning(
+                                    f"Could not convert date column to datetime: {str(e)}"
+                                )
+                                df.set_index(date_col, inplace=True)
+                                return df
 
                 # Fall back to the old format
                 df = pd.DataFrame(data["prices"])
@@ -217,11 +255,24 @@ class MarketDataCache:
                     try:
                         # Create a copy to avoid modifying the original
                         data_copy = data.copy()
-                        # Preserve the DatetimeIndex by converting it to timestamp int64 values
-                        # This allows round-trip conversion without losing datetime precision
+                        # Handle DatetimeIndex by resetting index and converting to string format
+                        # This avoids serialization issues with tuple keys
+                        data_reset = data_copy.reset_index()
+
+                        # Convert all datetime columns to strings
+                        for col in data_reset.columns:
+                            if pd.api.types.is_datetime64_any_dtype(data_reset[col]):
+                                data_reset[col] = data_reset[col].dt.strftime(
+                                    "%Y-%m-%d"
+                                )
+
+                        # Store with metadata to track the original index column
+                        index_col_name = data_reset.columns[
+                            0
+                        ]  # The former index is now the first column
                         data_dict = {
-                            "prices": data_copy.to_dict(orient="records"),
-                            "index_values": data_copy.index.astype(int).tolist(),
+                            "prices": data_reset.to_dict(orient="records"),
+                            "index_column": index_col_name,
                             "has_datetime_index": True,
                         }
                     except Exception as e:
@@ -232,9 +283,19 @@ class MarketDataCache:
                         try:
                             data_reset = data.reset_index()
                             date_col = data_reset.columns[0]
+
+                            # Convert any datetime columns to strings
+                            for col in data_reset.columns:
+                                if pd.api.types.is_datetime64_any_dtype(
+                                    data_reset[col]
+                                ):
+                                    data_reset[col] = data_reset[col].dt.strftime(
+                                        "%Y-%m-%d"
+                                    )
+
                             data_dict = {
                                 "prices": data_reset.to_dict(orient="records"),
-                                "date_column": date_col,
+                                "index_column": date_col,
                                 "has_datetime_index": True,
                             }
                         except Exception as e2:
@@ -242,7 +303,20 @@ class MarketDataCache:
                                 f"Fallback serialization also failed: {str(e2)}"
                             )
                             # Last resort: convert to a very simple format
-                            data_dict = {"prices": data.reset_index().to_dict()}
+                            # Convert to string format that will be serializable
+                            data_reset = data.reset_index()
+
+                            # Convert any datetime columns to strings
+                            for col in data_reset.columns:
+                                if pd.api.types.is_datetime64_any_dtype(
+                                    data_reset[col]
+                                ):
+                                    data_reset[col] = data_reset[col].dt.strftime(
+                                        "%Y-%m-%d"
+                                    )
+
+                            # Use records oriented format to avoid tuple keys
+                            data_dict = {"prices": data_reset.to_dict(orient="records")}
                 else:
                     # Regular DataFrame without datetime index
                     data_dict = {"prices": data.to_dict(orient="records")}
