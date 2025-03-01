@@ -2,158 +2,211 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union, cast
 
-from src.utils.api_config import APIConfigManager
-
-import numpy as np
 import openai
 import pandas as pd
 import requests
 import yfinance as yf
-from dotenv import load_dotenv
 from openai import OpenAI
 
-# Load environment variables
-load_dotenv()
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Configure API keys
-openai_api_key = os.getenv("OPENAI_API_KEY", "")
-alpha_vantage_key = os.getenv("ALPHA_VANTAGE_KEY", "")
-fmp_api_key = os.getenv("FMP_API_KEY", "")
-polygon_api_key = os.getenv("POLYGON_API_KEY", "")
+from src.api import API_KEYS, logger, make_api_request
+from src.utils.api_config import APIConfigManager
 
 # Initialize OpenAI client
 client = None
 try:
-    client = OpenAI(api_key=openai_api_key)
+    client = OpenAI(api_key=API_KEYS["openai"])
 except Exception as e:
     logger.warning(f"Could not initialize OpenAI client: {str(e)}")
     # Try without proxies parameter that might be causing the error
     try:
-        openai.api_key = os.getenv("OPENAI_API_KEY", "")
+        openai.api_key = API_KEYS["openai"]
         client = openai.OpenAI()
     except Exception as e2:
         logger.warning(f"Second attempt to initialize OpenAI client failed: {str(e2)}")
 
 
-def get_ollama_settings():
-    """
-    Get Ollama settings from the API config manager
-    """
-    # Get the base URL from the environment variable through API config
-    base_url = APIConfigManager.get_api_value_from_env("OLLAMA_BASE_URL")
-    # Use default if not configured
-    if not base_url:
-        base_url = "http://localhost:11434"
+class OllamaManager:
+    """Manager for Ollama models and settings."""
 
-    # Ensure base URL ends with a slash
-    if not base_url.endswith("/"):
-        base_url += "/"
+    # Class variables for caching
+    _base_url: Optional[str] = None
+    _default_model: Optional[str] = None
+    _available_models: Optional[List[str]] = None
+    _model_cache: Dict[str, Any] = {}
 
-    # Get default model from environment variable
-    default_model = os.getenv("OLLAMA_MODEL", "llama2")
+    @classmethod
+    def get_settings(cls) -> Tuple[str, str]:
+        """
+        Get Ollama settings from the API config manager
 
-    return base_url, default_model
+        Returns:
+            Tuple of (base_url, default_model)
+        """
+        # Use cached values if available
+        if cls._base_url is not None and cls._default_model is not None:
+            return cls._base_url, cls._default_model
 
+        # Get the base URL from the environment variable through API config
+        base_url = APIConfigManager.get_api_value_from_env("OLLAMA_BASE_URL")
+        # Use default if not configured
+        if not base_url:
+            base_url = "http://localhost:11434"
 
-def get_available_ollama_models():
-    """
-    Get available models from Ollama instance
-    """
-    base_url, _ = get_ollama_settings()
+        # Ensure base URL ends with a slash
+        if not base_url.endswith("/"):
+            base_url += "/"
 
-    try:
-        response = requests.get(f"{base_url}api/tags", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if "models" in data:
-                return [model["name"] for model in data["models"]]
+        # Get default model from environment variable or API config
+        default_model = APIConfigManager.get_api_value_from_env("OLLAMA_MODEL")
+        if not default_model:
+            default_model = "llama2"
+
+        # Cache the values
+        cls._base_url = base_url
+        cls._default_model = default_model
+
+        return base_url, default_model
+
+    @classmethod
+    def get_available_models(cls, force_refresh: bool = False) -> List[str]:
+        """
+        Get available models from Ollama instance
+
+        Args:
+            force_refresh: Force refresh of model list instead of using cache
+
+        Returns:
+            List of available model names
+        """
+        # Use cached models if available and not forcing refresh
+        if cls._available_models is not None and not force_refresh:
+            return cls._available_models
+
+        base_url, _ = cls.get_settings()
+
+        try:
+            success, data = make_api_request(
+                url=f"{base_url}api/tags",
+                timeout=10,
+                error_msg="Error fetching Ollama models",
+            )
+
+            if success and isinstance(data, dict) and "models" in data:
+                models = [model["name"] for model in data["models"]]
+                # Cache the result
+                cls._available_models = models
+                return models
             else:
                 logger.warning("No models found in Ollama response")
                 return []
-        else:
-            logger.error(f"Failed to get Ollama models: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error fetching Ollama models: {str(e)}")
             return []
-    except Exception as e:
-        logger.error(f"Error fetching Ollama models: {str(e)}")
-        return []
+
+    @classmethod
+    def select_best_model(cls, task_type: str = "general") -> str:
+        """
+        Select the best Ollama model for a given task type
+
+        Args:
+            task_type: Type of task ("finance", "general", "coding", etc.)
+
+        Returns:
+            Best model name for the task
+        """
+        # Check cache first
+        if task_type in cls._model_cache:
+            return cls._model_cache[task_type]
+
+        # Get available models
+        available_models = cls.get_available_models()
+        _, default_model = cls.get_settings()
+
+        if not available_models:
+            return default_model
+
+        # Model preferences by task type
+        model_preferences = {
+            "finance": [
+                "mistral-medium",
+                "mixtral",
+                "llama3",
+                "llama3:70b",
+                "llama3:8b",
+                "mistral",
+                "codellama",
+                "llama2:70b",
+                "llama2",
+            ],
+            "general": [
+                "llama3",
+                "llama3:70b",
+                "llama3:8b",
+                "mistral",
+                "mistral-medium",
+                "mixtral",
+                "llama2:70b",
+                "llama2",
+            ],
+            "coding": [
+                "codellama",
+                "llama3",
+                "llama3:70b",
+                "mixtral",
+                "mistral-medium",
+                "mistral",
+                "llama2:70b",
+                "llama2",
+            ],
+        }
+
+        # Use general preferences if task type not found
+        preferences = model_preferences.get(task_type, model_preferences["general"])
+
+        # Find the first available preferred model
+        for model in preferences:
+            for available_model in available_models:
+                # Check for exact match or if the model name starts with the preference
+                # (handles cases like llama3 matching llama3:8b, etc.)
+                if available_model == model or available_model.startswith(f"{model}:"):
+                    logger.info(
+                        f"Selected Ollama model {available_model} for {task_type} task"
+                    )
+                    # Cache the result
+                    cls._model_cache[task_type] = available_model
+                    return available_model
+
+        # If no preferred models are available, use the first available model
+        if available_models:
+            selected_model = available_models[0]
+            logger.info(
+                f"No preferred model available for {task_type}. Using {selected_model}"
+            )
+            cls._model_cache[task_type] = selected_model
+            return selected_model
+
+        # If no models available, return default
+        return default_model
 
 
-def select_best_ollama_model(task_type: str = "general"):
-    """
-    Select the best Ollama model for a given task type
+# Legacy function to maintain backward compatibility
+def get_ollama_settings() -> Tuple[str, str]:
+    """Legacy function that calls OllamaManager.get_settings()"""
+    return OllamaManager.get_settings()
 
-    Args:
-        task_type: Type of task ("finance", "general", "coding", etc.)
 
-    Returns:
-        Best model name for the task
-    """
-    # Get available models
-    available_models = get_available_ollama_models()
+# Legacy function to maintain backward compatibility
+def get_available_ollama_models() -> List[str]:
+    """Legacy function that calls OllamaManager.get_available_models()"""
+    return OllamaManager.get_available_models()
 
-    if not available_models:
-        return os.getenv("OLLAMA_MODEL", "llama2")
 
-    # Model preferences by task type
-    model_preferences = {
-        "finance": [
-            "mistral-medium",
-            "mixtral",
-            "llama3",
-            "llama3:70b",
-            "llama3:8b",
-            "mistral",
-            "codellama",
-            "llama2:70b",
-            "llama2",
-        ],
-        "general": [
-            "llama3",
-            "llama3:70b",
-            "llama3:8b",
-            "mistral",
-            "mistral-medium",
-            "mixtral",
-            "llama2:70b",
-            "llama2",
-        ],
-        "coding": [
-            "codellama",
-            "llama3",
-            "llama3:70b",
-            "mixtral",
-            "mistral-medium",
-            "mistral",
-            "llama2:70b",
-            "llama2",
-        ],
-    }
-
-    # Use general preferences if task type not found
-    preferences = model_preferences.get(task_type, model_preferences["general"])
-
-    # Find the first available preferred model
-    for model in preferences:
-        for available_model in available_models:
-            # Check for exact match or if the model name starts with the preference
-            # (handles cases like llama3 matching llama3:8b, etc.)
-            if available_model == model or available_model.startswith(f"{model}:"):
-                logger.info(
-                    f"Selected Ollama model {available_model} for {task_type} task"
-                )
-                return available_model
-
-    # If no preferred models are available, use the first available model
-    logger.info(
-        f"No preferred model available for {task_type}. Using {available_models[0]}"
-    )
-    return available_models[0]
+# Legacy function to maintain backward compatibility
+def select_best_ollama_model(task_type: str = "general") -> str:
+    """Legacy function that calls OllamaManager.select_best_model()"""
+    return OllamaManager.select_best_model(task_type)
 
 
 def analyze_with_openai(
@@ -181,7 +234,10 @@ def analyze_with_openai(
                 "You are a financial analyst providing insights on market data."
             )
         elif task_type == "coding":
-            system_prompt = "You are a programming expert helping with code analysis and development."
+            system_prompt = (
+                "You are a programming expert helping with code"
+                " analysis and development."
+            )
 
         completion = client.chat.completions.create(
             model=model,
@@ -199,7 +255,7 @@ def analyze_with_openai(
 
 
 def analyze_with_ollama(
-    prompt: str, model: str = None, task_type: str = "general"
+    prompt: str, model: Optional[str] = None, task_type: str = "general"
 ) -> str:
     """
     Analyze data using Ollama locally hosted model.
@@ -212,23 +268,16 @@ def analyze_with_ollama(
     Returns:
         Analysis result as a string
     """
-    base_url, default_model = get_ollama_settings()
-
-    # Log info for debugging
-    logger.info(
-        f"Ollama analysis request with params: model={model}, task_type={task_type}"
-    )
-    logger.info(f"Base URL from settings: {base_url}, Default model: {default_model}")
+    base_url, default_model = OllamaManager.get_settings()
 
     # If no model specified, select the best model for the task
     if model is None:
         try:
-            model = select_best_ollama_model(task_type)
-            logger.info(f"Selected model based on task: {model}")
+            model = OllamaManager.select_best_model(task_type)
+            logger.debug(f"Selected model based on task: {model}")
         except Exception as e:
             logger.warning(f"Failed to select best model: {str(e)}. Using default.")
             model = default_model
-            logger.info(f"Using default model: {model}")
 
     # Customize system prompt based on task type
     system_prompt = ""
@@ -239,68 +288,100 @@ def analyze_with_ollama(
         )
     elif task_type == "coding":
         system_prompt = (
-            "You are a programming expert helping with code analysis and development."
+            "You are a programming expert helping with code analysis "
+            "and development."
         )
 
-    # Add system prompt if provided and if model supports it
-    final_prompt = prompt
-    if system_prompt:
-        final_prompt = f"{system_prompt}\n\n{prompt}"
+    # Create request body with appropriate parameters
+    request_body = {
+        "model": model,
+        "prompt": prompt,
+        "system": system_prompt,  # Some models support system parameter
+        "stream": False,
+    }
 
     try:
-        # Make API call to Ollama
-        request_url = f"{base_url}api/generate"
-        request_body = {
-            "model": model,
-            "prompt": final_prompt,
-            "system": system_prompt,  # Some models support system parameter
-            "stream": False,
-        }
-
-        logger.info(f"Making Ollama API request to: {request_url}")
-        logger.info(
-            f"Request body: model={model}, prompt length={len(final_prompt)}, "
-            f"system prompt length={len(system_prompt)}"
+        # Make API call to Ollama using our common request function
+        success, response_data = make_api_request(
+            url=f"{base_url}api/generate",
+            method="POST",
+            json_data=request_body,
+            timeout=60,  # Higher timeout for LLM inference
+            error_msg=f"Ollama API error for model {model}",
         )
 
-        response = requests.post(
-            request_url,
-            json=request_body,
-            timeout=60,  # Add a timeout to prevent hanging requests
-        )
-
-        logger.info(f"Ollama API response status: {response.status_code}")
-
-        if response.status_code == 200:
-            response_json = response.json()
-            if "response" in response_json:
-                return response_json["response"]
-            else:
-                logger.error(f"Unexpected Ollama API response format: {response_json}")
-                return "Error: Unexpected API response format"
-        elif response.status_code == 404:
-            logger.error(
-                f"Ollama API error 404: Model '{model}' not found or Ollama server not running"
-            )
-            return (
-                f"Error: Model '{model}' not found or Ollama server not running. "
-                f"Please check your Ollama installation."
-            )
+        if success and isinstance(response_data, dict) and "response" in response_data:
+            return response_data["response"]
+        elif not success:
+            # Handle specific error cases
+            error_msg = str(response_data)
+            if "404" in error_msg:
+                return (
+                    f"Error: Model '{model}' not found or Ollama server not running. "
+                    f"Please check your Ollama installation."
+                )
+            return f"Error: {error_msg}"
         else:
-            logger.error(f"Ollama API error: {response.status_code} - {response.text}")
-            return f"Error: {response.status_code} - {response.text}"
-
-    except requests.exceptions.Timeout:
-        logger.error("Ollama API request timed out after 60 seconds")
-        return "Error: Request to Ollama server timed out. The server may be busy or not responding."
-
-    except requests.exceptions.ConnectionError as ce:
-        logger.error(f"Connection error to Ollama API: {str(ce)}")
-        return "Error: Could not connect to Ollama server. Please ensure the server is running and accessible."
+            logger.error(f"Unexpected Ollama API response format: {response_data}")
+            return "Error: Unexpected API response format"
 
     except Exception as e:
         logger.error(f"Error with Ollama analysis: {str(e)}")
         return f"Error: {str(e)}"
+
+
+def _filter_dataframe_by_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
+    """
+    Filter a DataFrame based on the specified time period.
+
+    Args:
+        df: DataFrame with datetime index
+        period: Time period (e.g., "30d", "6mo", "1y")
+
+    Returns:
+        Filtered DataFrame
+    """
+    # Filter based on period
+    if period.endswith("d"):
+        days = int(period[:-1])
+        start_date = datetime.now() - timedelta(days=days)
+        df = df[df.index >= start_date]
+    elif period.endswith("mo"):
+        months = int(period[:-2])
+        start_date = datetime.now() - timedelta(days=months * 30)
+        df = df[df.index >= start_date]
+    elif period.endswith("y"):
+        years = int(period[:-1])
+        start_date = datetime.now() - timedelta(days=years * 365)
+        df = df[df.index >= start_date]
+
+    return df
+
+
+def _calculate_period_start_date(period: str) -> str:
+    """
+    Calculate start date string based on period.
+
+    Args:
+        period: Time period (e.g., "30d", "6mo", "1y")
+
+    Returns:
+        Start date string in YYYY-MM-DD format
+    """
+    if period.endswith("d"):
+        days = int(period[:-1])
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    elif period.endswith("mo"):
+        months = int(period[:-2])
+        start_date = (datetime.now() - timedelta(days=months * 30)).strftime("%Y-%m-%d")
+    elif period.endswith("y"):
+        years = int(period[:-1])
+        start_date = (datetime.now() - timedelta(days=years * 365)).strftime("%Y-%m-%d")
+    else:
+        # Default to 6 months if period format is not recognized
+        start_date = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+
+    return start_date
 
 
 def get_alpha_vantage_data(
@@ -316,30 +397,36 @@ def get_alpha_vantage_data(
     Returns:
         Tuple of (success, DataFrame of historical data, company info)
     """
-    if not alpha_vantage_key:
+    if not API_KEYS["alpha_vantage"]:
+        return False, pd.DataFrame(), {}
+
+    # Get daily time series data
+    url = f"https://www.alphavantage.co/query"
+    params = {
+        "function": "TIME_SERIES_DAILY",
+        "symbol": ticker,
+        "outputsize": "full",
+        "apikey": API_KEYS["alpha_vantage"],
+    }
+
+    success, data = make_api_request(
+        url=url,
+        params=params,
+        error_msg=f"Error getting data from Alpha Vantage for {ticker}",
+    )
+
+    if not success or not isinstance(data, dict):
+        return False, pd.DataFrame(), {}
+
+    if "Error Message" in data:
+        logger.error(f"Alpha Vantage API error: {data['Error Message']}")
+        return False, pd.DataFrame(), {}
+
+    if "Time Series (Daily)" not in data:
+        logger.error("No time series data found in Alpha Vantage response")
         return False, pd.DataFrame(), {}
 
     try:
-        # Get daily time series data
-        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&outputsize=full&apikey={alpha_vantage_key}"
-        response = requests.get(url, timeout=15)  # 15 second timeout for API request
-
-        if response.status_code != 200:
-            logger.error(
-                f"Alpha Vantage API returned status code {response.status_code}"
-            )
-            return False, pd.DataFrame(), {}
-
-        data = response.json()
-
-        if "Error Message" in data:
-            logger.error(f"Alpha Vantage API error: {data['Error Message']}")
-            return False, pd.DataFrame(), {}
-
-        if "Time Series (Daily)" not in data:
-            logger.error("No time series data found in Alpha Vantage response")
-            return False, pd.DataFrame(), {}
-
         # Convert to DataFrame
         time_series = data["Time Series (Daily)"]
         df = pd.DataFrame(time_series).T
@@ -363,30 +450,28 @@ def get_alpha_vantage_data(
             df[col] = pd.to_numeric(df[col])
 
         # Filter based on period
-        if period.endswith("d"):
-            days = int(period[:-1])
-            start_date = datetime.now() - timedelta(days=days)
-            df = df[df.index >= start_date]
-        elif period.endswith("mo"):
-            months = int(period[:-2])
-            start_date = datetime.now() - timedelta(days=months * 30)
-            df = df[df.index >= start_date]
-        elif period.endswith("y"):
-            years = int(period[:-1])
-            start_date = datetime.now() - timedelta(days=years * 365)
-            df = df[df.index >= start_date]
+        df = _filter_dataframe_by_period(df, period)
 
         # Get company overview
-        overview_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={ticker}&apikey={alpha_vantage_key}"
-        overview_response = requests.get(overview_url, timeout=15)  # 15 second timeout
-        company_info = {}
+        overview_url = "https://www.alphavantage.co/query"
+        overview_params = {
+            "function": "OVERVIEW",
+            "symbol": ticker,
+            "apikey": API_KEYS["alpha_vantage"],
+        }
 
-        if overview_response.status_code == 200:
-            company_info = overview_response.json()
+        overview_success, company_info = make_api_request(
+            url=overview_url,
+            params=overview_params,
+            error_msg=f"Error getting company overview from Alpha Vantage for {ticker}",
+        )
+
+        if not overview_success or not isinstance(company_info, dict):
+            company_info = {}
 
         return True, df, company_info
     except Exception as e:
-        logger.error(f"Error getting data from Alpha Vantage: {str(e)}")
+        logger.error(f"Error processing Alpha Vantage data: {str(e)}")
         return False, pd.DataFrame(), {}
 
 
@@ -403,36 +488,25 @@ def get_financial_modeling_prep_data(
     Returns:
         Tuple of (success, DataFrame of historical data, company info)
     """
-    if not fmp_api_key:
+    if not API_KEYS["fmp"]:
         return False, pd.DataFrame(), {}
 
     try:
         # Calculate the start date based on period
-        if period.endswith("d"):
-            days = int(period[:-1])
-            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        elif period.endswith("mo"):
-            months = int(period[:-2])
-            start_date = (datetime.now() - timedelta(days=months * 30)).strftime(
-                "%Y-%m-%d"
-            )
-        elif period.endswith("y"):
-            years = int(period[:-1])
-            start_date = (datetime.now() - timedelta(days=years * 365)).strftime(
-                "%Y-%m-%d"
-            )
-        else:
-            start_date = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+        start_date = _calculate_period_start_date(period)
 
         # Get historical price data
-        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?from={start_date}&apikey={fmp_api_key}"
-        response = requests.get(url, timeout=15)  # 15 second timeout
+        url = "https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
+        params = {"from": start_date, "apikey": API_KEYS["fmp"]}
 
-        if response.status_code != 200:
-            logger.error(f"FMP API returned status code {response.status_code}")
+        success, data = make_api_request(
+            url=url.format(ticker=ticker),
+            params=params,
+            error_msg=f"Error getting data from Financial Modeling Prep for {ticker}",
+        )
+
+        if not success or not isinstance(data, dict):
             return False, pd.DataFrame(), {}
-
-        data = response.json()
 
         if "historical" not in data:
             logger.error("No historical data found in FMP response")
@@ -457,18 +531,22 @@ def get_financial_modeling_prep_data(
         )
 
         # Get company profile
-        profile_url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={fmp_api_key}"
-        profile_response = requests.get(profile_url, timeout=15)  # 15 second timeout
-        company_info = {}
+        profile_url = "https://financialmodelingprep.com/api/v3/profile/{ticker}"
+        profile_params = {"apikey": API_KEYS["fmp"]}
 
-        if profile_response.status_code == 200:
-            profile_data = profile_response.json()
-            if profile_data and len(profile_data) > 0:
-                company_info = profile_data[0]
+        profile_success, profile_data = make_api_request(
+            url=profile_url.format(ticker=ticker),
+            params=profile_params,
+            error_msg=f"Error getting company profile from FMP for {ticker}",
+        )
+
+        company_info: Dict[str, Any] = {}
+        if profile_success and isinstance(profile_data, list) and profile_data:
+            company_info = profile_data[0]
 
         return True, df, company_info
     except Exception as e:
-        logger.error(f"Error getting data from Financial Modeling Prep: {str(e)}")
+        logger.error(f"Error processing Financial Modeling Prep data: {str(e)}")
         return False, pd.DataFrame(), {}
 
 
@@ -538,6 +616,10 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
     Returns:
         Dictionary with analysis results
     """
+    # Access API keys
+    alpha_vantage_key = API_KEYS["alpha_vantage"]
+    fmp_api_key = API_KEYS["fmp"]
+
     result = {
         "ticker": ticker,
         "period": period,
@@ -795,9 +877,10 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                         Industry: {result['data']['industry']}
                         Data source: Aggregated from multiple sources
 
-                        Provide a concise analysis (maximum 200 words) of this stock's trend over the given period.
-                        Mention whether it's bullish, bearish, or neutral. Note any significant events or patterns.
-                        Conclude with a brief outlook on what investors might expect in the near term.
+                        Provide a concise analysis (maximum 200 words) of this stock's
+                        trend over the given period. Mention whether it's bullish,
+                        bearish, or neutral. Note any significant events or patterns.
+                        Conclude with a brief outlook on what investors might expect.
                         """
 
                         # Try OpenAI first, fall back to Ollama
@@ -847,9 +930,10 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                         Industry: {result['data']['industry']}
                         Data source: {result['data_source']}
 
-                        Provide a concise analysis (maximum 200 words) of this stock's trend over the given period.
-                        Mention whether it's bullish, bearish, or neutral. Note any significant events or patterns.
-                        Conclude with a brief outlook on what investors might expect in the near term.
+                        Provide a concise analysis (maximum 200 words) of this stock's
+                        trend over the given period. Mention whether it's bullish,
+                        bearish, or neutral. Note any significant events or patterns.
+                        Conclude with a brief outlook on what investors might expect.
                         """
 
                         # Try OpenAI first, fall back to Ollama
@@ -872,7 +956,8 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
 
                 return result
 
-    # Use default fallback approach if no user preferences or if all user-preferred sources failed
+    # Use default fallback approach if no user preferences
+    # or if all user-preferred sources failed
     # Get a list of all available data sources
     available_sources = []
 
@@ -888,12 +973,20 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
 
     if alpha_vantage_key:
         available_sources.append(
-            {"name": "Alpha Vantage", "priority": 2, "fetcher": get_alpha_vantage_data}
+            {
+                "name": "Alpha Vantage",
+                "priority": 2,
+                "fetcher": get_alpha_vantage_data,
+            }
         )
 
     # Yahoo Finance doesn't need an API key
     available_sources.append(
-        {"name": "Yahoo Finance", "priority": 3, "fetcher": get_yahoo_finance_data}
+        {
+            "name": "Yahoo Finance",
+            "priority": 3,
+            "fetcher": get_yahoo_finance_data,
+        }
     )
 
     # Sort sources by priority
@@ -932,7 +1025,7 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                 hist["MA200"] = hist["Close"].rolling(window=min(200, len(hist))).mean()
 
                 # Create data object with common mappings
-                result["data"] = {
+                common_data = {
                     "start_date": hist.index[0].strftime("%Y-%m-%d"),
                     "end_date": hist.index[-1].strftime("%Y-%m-%d"),
                     "start_price": f"{start_price:.2f}",
@@ -945,44 +1038,45 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                     else 0,
                 }
 
+                # Initialize result["data"] as a dictionary
+                result["data"] = common_data
+
                 # Add source-specific mappings
-                if source_name == "Financial Modeling Prep":
-                    result["data"].update(
-                        {
-                            "company_name": company_info.get("companyName", ticker),
-                            "sector": company_info.get("sector", "Unknown"),
-                            "industry": company_info.get("industry", "Unknown"),
-                            "market_cap": company_info.get("mktCap", None),
-                            "pe_ratio": company_info.get("pe", None),
-                        }
-                    )
-                elif source_name == "Alpha Vantage":
-                    result["data"].update(
-                        {
-                            "company_name": company_info.get("Name", ticker),
-                            "sector": company_info.get("Sector", "Unknown"),
-                            "industry": company_info.get("Industry", "Unknown"),
-                            "market_cap": company_info.get(
-                                "MarketCapitalization", None
-                            ),
-                            "pe_ratio": company_info.get("PERatio", None),
-                        }
-                    )
-                elif source_name == "Yahoo Finance":
-                    result["data"].update(
-                        {
-                            "company_name": company_info.get("shortName", ticker),
-                            "sector": company_info.get("sector", "Unknown"),
-                            "industry": company_info.get("industry", "Unknown"),
-                            "market_cap": company_info.get("marketCap", None),
-                            "pe_ratio": company_info.get("trailingPE", None),
-                        }
-                    )
+                additional_data = {}
+
+                if source_name == "Financial Modeling Prep" and isinstance(
+                    company_info, dict
+                ):
+                    additional_data = {
+                        "company_name": company_info.get("companyName", ticker),
+                        "sector": company_info.get("sector", "Unknown"),
+                        "industry": company_info.get("industry", "Unknown"),
+                        "market_cap": company_info.get("mktCap", None),
+                        "pe_ratio": company_info.get("pe", None),
+                    }
+
+                elif source_name == "Alpha Vantage" and isinstance(company_info, dict):
+                    additional_data = {
+                        "company_name": company_info.get("Name", ticker),
+                        "sector": company_info.get("Sector", "Unknown"),
+                        "industry": company_info.get("Industry", "Unknown"),
+                        "market_cap": company_info.get("MarketCapitalization", None),
+                        "pe_ratio": company_info.get("PERatio", None),
+                    }
+
+                elif source_name == "Yahoo Finance" and isinstance(company_info, dict):
+                    additional_data = {
+                        "company_name": company_info.get("shortName", ticker),
+                        "sector": company_info.get("sector", "Unknown"),
+                        "industry": company_info.get("industry", "Unknown"),
+                        "market_cap": company_info.get("marketCap", None),
+                        "pe_ratio": company_info.get("trailingPE", None),
+                    }
 
                     # Add news if available
                     if "news" in company_info and company_info["news"]:
                         try:
-                            result["data"]["news"] = [
+                            news_data = [
                                 {
                                     "title": item.get("title", ""),
                                     "link": item.get("link", ""),
@@ -995,8 +1089,14 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                                     :3
                                 ]  # Just take the top 3 news
                             ]
+                            additional_data["news"] = news_data
                         except Exception as e:
                             logger.warning(f"Error processing news data: {str(e)}")
+
+                # Merge additional_data into result["data"]
+                if additional_data and isinstance(result["data"], dict):
+                    for key, value in additional_data.items():
+                        result["data"][key] = value
 
             except Exception as e:
                 logger.error(f"Error processing {source_name} data: {str(e)}")
@@ -1005,9 +1105,10 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
     # If we still don't have data after trying all sources, log an error
     if not result["data"]:
         logger.error(f"Could not retrieve data for {ticker} from any available source")
-        result[
-            "analysis"
-        ] = f"No data found for stock {ticker}. We tried multiple data sources but couldn't retrieve the data."
+        result["analysis"] = (
+            f"No data found for stock {ticker}. We tried multiple data sources "
+            f"but couldn't retrieve the data."
+        )
         return result
     # If we have data from any source, generate AI analysis
     if result["data"]:
@@ -1028,9 +1129,10 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
             Industry: {result['data']['industry']}
             Data source: {result['data_source']}
 
-            Provide a concise analysis (maximum 200 words) of this stock's trend over the given period.
-            Mention whether it's bullish, bearish, or neutral. Note any significant events or patterns.
-            Conclude with a brief outlook on what investors might expect in the near term.
+            Provide a concise analysis (maximum 200 words) of this stock's
+            trend over the given period. Mention whether it's bullish,
+            bearish, or neutral. Note any significant events or patterns.
+            Conclude with a brief outlook on what investors might expect.
             """
 
             # Try OpenAI first, fall back to Ollama
@@ -1092,7 +1194,10 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
 
                 # Use a custom User-Agent to avoid rate limiting
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )
                 }
                 # Create a custom session
                 session = requests.Session()
@@ -1125,18 +1230,25 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
         # If all formats failed, use API price directly or fallback to synthetic data
         if hist.empty or "Close" not in hist.columns:
             logger.warning(
-                f"Could not retrieve historical data for {symbol} using formats: {formats_tried}"
+                (
+                    f"Could not retrieve historical data for {symbol} "
+                    f"using formats: {formats_tried}"
+                )
             )
 
-            # Create synthetic data for demonstration instead of returning an error
-            logger.warning(
-                f"Creating synthetic data for {symbol} for demonstration purposes"
+            # Return error instead of synthetic data
+            logger.error(
+                (
+                    f"Could not retrieve historical data for {symbol} "
+                    f"using formats: {formats_tried}"
+                )
             )
-
             # Try to get current price from CoinGecko's free API as fallback
-            current_price = None
             try:
-                api_url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
+                api_url = (
+                    f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}"
+                    f"&vs_currencies=usd"
+                )
                 response = requests.get(api_url, timeout=10)  # 10 second timeout
                 if response.status_code == 200:
                     data = response.json()
@@ -1145,57 +1257,37 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
                         logger.info(
                             f"Got current price from CoinGecko: ${current_price}"
                         )
+                        error_msg = (
+                            f"Could not retrieve historical data for {symbol}, "
+                            f"but current price is ${current_price}."
+                        )
+                    else:
+                        error_msg = (
+                            f"Could not retrieve historical data for {symbol} "
+                            f"and price data is not available."
+                        )
+                else:
+                    error_msg = (
+                        f"Could not retrieve historical data for {symbol} "
+                        f"and CoinGecko API returned status {response.status_code}."
+                    )
             except Exception as e:
                 logger.warning(f"Failed to get price from CoinGecko: {str(e)}")
+                error_msg = (
+                    f"Could not retrieve historical data for {symbol} "
+                    f"from any data source."
+                )
+            # Return error
+            return {
+                "symbol": symbol,
+                "days": days,
+                "data": {},
+                "analysis": error_msg,
+                "success": False,
+                "error": error_msg,
+            }
 
-            # Use fallback price if CoinGecko also failed
-            if current_price is None:
-                if symbol.upper() == "BTC":
-                    current_price = 69000
-                elif symbol.upper() == "ETH":
-                    current_price = 3500
-                else:
-                    current_price = 100
-                logger.info(f"Using fallback price for {symbol}: ${current_price}")
-
-            # Generate synthetic data
-            start_price = (
-                current_price * 0.9
-            )  # 10% lower than current price as starting point
-            dates = pd.date_range(end=datetime.now(), periods=days, freq="D")
-
-            # Create a random walk price series with upward trend
-            volatility = 0.02  # 2% daily volatility for crypto
-            returns = np.random.normal(
-                0.001, volatility, len(dates)
-            )  # Slight upward bias
-            cumulative_returns = np.exp(np.cumsum(returns)) - 1
-            prices = start_price * (1 + cumulative_returns)
-
-            # Add some randomness to high and low
-            highs = prices * (1 + np.random.uniform(0.01, 0.05, len(dates)))
-            lows = prices * (1 - np.random.uniform(0.01, 0.05, len(dates)))
-
-            # Create a DataFrame with synthetic data
-            hist = pd.DataFrame(
-                {
-                    "Close": prices,
-                    "High": highs,
-                    "Low": lows,
-                    "Volume": np.random.uniform(1000, 10000, len(dates)),
-                },
-                index=dates,
-            )
-
-            # Add moving averages
-            hist["MA20"] = hist["Close"].rolling(window=min(20, len(hist))).mean()
-            hist["MA50"] = hist["Close"].rolling(window=min(50, len(hist))).mean()
-
-            # Continue with analysis using this synthetic data
-            logger.info(
-                f"Created synthetic data for {symbol} with {len(hist)} data points"
-            )
-            # The rest of the function will process this data as if it came from an API
+            # This code will never be reached due to the early return above
 
         # Basic statistics
         start_price = hist["Close"].iloc[0]
@@ -1253,9 +1345,10 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
             Current 20-day moving average: ${result['data']['current_ma20']}
             Current 50-day moving average: ${result['data']['current_ma50']}
 
-            Provide a concise analysis (maximum 200 words) of this cryptocurrency's trend over the given period.
-            Mention whether it's bullish, bearish, or neutral. Note any significant events or patterns.
-            Conclude with a brief outlook on what investors might expect in the near term.
+            Provide a concise analysis (maximum 200 words) of this cryptocurrency's
+            trend over the given period. Mention whether it's bullish,
+            bearish, or neutral. Note any significant events or patterns.
+            Conclude with a brief outlook on what investors might expect.
             """
 
             # Try to use Ollama first, fall back to OpenAI if that fails
@@ -1274,9 +1367,10 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
                     result["model_used"] = "OpenAI"
                 except Exception as e2:
                     logger.error(f"Both Ollama and OpenAI failed: {str(e2)}")
-                    result[
-                        "analysis"
-                    ] = "Error: Could not generate analysis. Please check Ollama server or network connection."
+                    result["analysis"] = (
+                        "Error: Could not generate analysis. Please check Ollama server "
+                        "or network connection."
+                    )
                     result["model_used"] = "Error"
 
             result["success"] = True
@@ -1389,7 +1483,10 @@ def get_etf_recommendations(
             # Prepare recommendation data for analysis
             etf_data = "\n".join(
                 [
-                    f"- {r['ticker']} ({r['name']}): 1yr return {r['yearly_change']}%, expense ratio {r['expense_ratio']}%"
+                    (
+                        f"- {r['ticker']} ({r['name']}): 1yr return {r['yearly_change']}%, "
+                        f"expense ratio {r['expense_ratio']}%"
+                    )
                     for r in recommendations[:5]
                 ]
             )
@@ -1399,10 +1496,12 @@ def get_etf_recommendations(
 
             {etf_data}
 
-            Provide a concise analysis (maximum 150 words) explaining why these ETFs are appropriate for
+            Provide a concise analysis (maximum 150 words) explaining why
+            these ETFs are appropriate for
             a {risk_profile} risk profile.
 
-            Mention the benefits of this allocation and any potential considerations or risks.
+            Mention the benefits of this allocation and any potential
+            considerations or risks.
             """
 
             try:
@@ -1435,7 +1534,7 @@ def get_etf_recommendations(
 
 
 def analyze_with_best_model(
-    prompt: str, task_type: str = "finance", fallback_message: str = None
+    prompt: str, task_type: str = "finance", fallback_message: Optional[str] = None
 ) -> str:
     """
     Use the best available model to perform analysis based on task type
@@ -1450,14 +1549,19 @@ def analyze_with_best_model(
     """
     # First try OpenAI
     try:
-        # For finance tasks, try to use GPT-4 if the API key exists
+        # For finance tasks, try to use GPT-4 if configured
         openai_model = "gpt-3.5-turbo"
         if task_type == "finance" and os.getenv("OPENAI_API_KEY"):
-            openai_model = (
-                "gpt-4"
-                if "gpt-4" in os.getenv("OPENAI_API_KEY", "")
-                else "gpt-3.5-turbo"
+            # Get API configuration
+            from src.utils.api_config import APIConfigManager
+
+            # Check if GPT-4 is enabled in the configuration
+            gpt4_enabled = APIConfigManager.get_api_value_from_env(
+                "USE_GPT4_FOR_FINANCE"
             )
+            if gpt4_enabled and gpt4_enabled.lower() in ["true", "yes", "1"]:
+                openai_model = "gpt-4"
+                logger.info("Using GPT-4 for finance task based on configuration")
 
         return analyze_with_openai(prompt, model=openai_model, task_type=task_type)
     except Exception as e:
@@ -1500,7 +1604,10 @@ def analyze_with_best_model(
                         )
                     except Exception as model_error:
                         logger.warning(
-                            f"Fallback model {fallback_model} failed: {str(model_error)}"
+                            (
+                                f"Fallback model {fallback_model} failed: "
+                                f"{str(model_error)}"
+                            )
                         )
                         continue
 
@@ -1513,7 +1620,10 @@ def analyze_with_best_model(
                 # Use fallback message or generate a generic one
                 if fallback_message:
                     return fallback_message
-                return "Analysis could not be generated at this time. Please try again later."
+                return (
+                    "Analysis could not be generated at this time. "
+                    "Please try again later."
+                )
 
 
 def generate_generic_analysis(prompt: str) -> str:
@@ -1521,7 +1631,9 @@ def generate_generic_analysis(prompt: str) -> str:
     return analyze_with_best_model(
         prompt,
         task_type="general",
-        fallback_message="Analysis could not be generated at this time. Please try again later.",
+        fallback_message=(
+            "Analysis could not be generated at this time. " "Please try again later."
+        ),
     )
 
 
@@ -1530,7 +1642,8 @@ def generate_social_post(post_type: str, post_data: dict) -> str:
     Generate social media post content based on type and data.
 
     Args:
-        post_type: Type of post to generate (portfolio_update, market_update, investment_tip)
+        post_type: Type of post to generate (portfolio_update, market_update,
+            investment_tip)
         post_data: Dictionary containing data specific to the post type
 
     Returns:
@@ -1547,12 +1660,14 @@ def generate_social_post(post_type: str, post_data: dict) -> str:
             assets_str = ", ".join(top_assets[:3]) if top_assets else "various assets"
 
             prompt = f"""
-            Create a concise social media post (max 280 characters) about a portfolio update with the following details:
+            Create a concise social media post (max 280 characters) about a portfolio
+            update with the following details:
             - Portfolio value: ${portfolio_value:,.2f}
             - Daily change: {daily_change}%
             - Top performing assets: {assets_str}
 
-            The tone should be professional but conversational. Include a relevant emoji or two.
+            The tone should be professional but conversational.
+            Include a relevant emoji or two.
             Do not use hashtags unless they add significant value.
             """
 
@@ -1564,7 +1679,8 @@ def generate_social_post(post_type: str, post_data: dict) -> str:
             sentiment = post_data.get("sentiment", "neutral")
 
             prompt = f"""
-            Create a concise social media post (max 280 characters) about current market conditions:
+            Create a concise social media post (max 280 characters) about
+            current market conditions:
             - Bitcoin price: ${btc_price:,.2f}
             - Ethereum price: ${eth_price:,.2f}
             - Overall market trend: {market_trend}
@@ -1589,20 +1705,29 @@ def generate_social_post(post_type: str, post_data: dict) -> str:
             topic_desc = topic_map.get(topic, topic)
 
             prompt = f"""
-            Create a concise social media post (max 280 characters) sharing an investment tip about {topic_desc}.
+            Create a concise social media post (max 280 characters) sharing
+            an investment tip about {topic_desc}.
             The tone should be helpful and educational without being preachy.
             Include a relevant emoji or two to make the post more engaging.
-            The tip should be actionable and valuable to both beginner and intermediate investors.
+            The tip should be actionable and valuable to both beginner
+            and intermediate investors.
             """
 
         else:
-            return "Error: Unsupported post type. Please choose from portfolio_update, market_update, or investment_tip."
+            return (
+                "Error: Unsupported post type. Please choose from "
+                "portfolio_update, market_update, or investment_tip."
+            )
 
         # Generate the post content using the best available model
         return analyze_with_best_model(
             prompt,
             task_type="finance",
-            fallback_message="📊 Market update: BTC at $69k, ETH at $3.5k. Overall sentiment remains cautiously optimistic despite recent volatility. Keep an eye on upcoming economic data releases.",
+            fallback_message=(
+                "📊 Market update: BTC at $69k, ETH at $3.5k. Overall sentiment"
+                " remains cautiously optimistic despite recent volatility. Keep an eye on"
+                " upcoming economic data."
+            ),
         )
 
     except Exception as e:

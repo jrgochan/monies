@@ -239,7 +239,7 @@ def get_user_info(provider: str, access_token: str) -> Optional[Dict[str, Any]]:
         headers["Content-Type"] = "application/json"
 
     try:
-        response = requests.get(config["userinfo_url"], headers=headers)
+        response = requests.get(config["userinfo_url"], headers=headers, timeout=10)
         response.raise_for_status()
 
         user_data = response.json()
@@ -284,7 +284,7 @@ def get_user_info(provider: str, access_token: str) -> Optional[Dict[str, Any]]:
             if not email:
                 # Try to get primary email via separate endpoint
                 email_response = requests.get(
-                    "https://api.github.com/user/emails", headers=headers
+                    "https://api.github.com/user/emails", headers=headers, timeout=10
                 )
                 if email_response.status_code == 200:
                     emails = email_response.json()
@@ -557,7 +557,13 @@ def create_api_keys_from_oauth(user: User, db=None) -> Dict[str, bool]:
 
         results = {}
         # Create API keys for each supported service
-        for service in config.get("api_services", []):
+        api_services = config.get("api_services", [])
+
+        # Ensure api_services is a list for iteration
+        if not isinstance(api_services, list):
+            api_services = []
+
+        for service in api_services:
             # Get refresh token if available
             refresh_token = None
             if user.oauth_refresh_token:
