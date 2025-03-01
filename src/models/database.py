@@ -196,6 +196,36 @@ class AiAnalysis(Base):
     cached_until = Column(DateTime, nullable=True)
 
 
+class MarketData(Base):
+    __tablename__ = "market_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), index=True)  # Stock/ETF/Crypto symbol
+    data_type = Column(
+        String(20), index=True
+    )  # 'price_history', 'fundamentals', 'options', etc.
+    time_period = Column(String(10), index=True)  # '1d', '1mo', '1y', 'max', etc.
+    data_source = Column(String(50))  # 'yahoo_finance', 'alpha_vantage', etc.
+    data = Column(Text)  # JSON string containing the actual data
+    last_updated = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)  # When this cache entry expires
+
+
+class PortfolioOptimization(Base):
+    __tablename__ = "portfolio_optimizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    base_etf = Column(String(20))
+    included_etfs = Column(Text)  # JSON array of included ETFs
+    lookback_period = Column(String(10))
+    optimization_method = Column(String(50))
+    weights = Column(Text)  # JSON object mapping ETF symbols to allocation weights
+    performance_metrics = Column(Text, nullable=True)  # JSON object with metrics
+    created_at = Column(DateTime, default=datetime.utcnow)
+    analysis_text = Column(Text, nullable=True)  # AI-generated analysis text
+
+
 # Create all tables
 def init_db():
     Base.metadata.create_all(bind=engine)

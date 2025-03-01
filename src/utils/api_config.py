@@ -128,7 +128,7 @@ class APIConfigManager:
             return test_func(key)
     
     @staticmethod
-    def save_api_credentials(service_id: str, key: str, secret: str = None, db=None, user_id=None):
+    def save_api_credentials(service_id: str, key: str, secret: str = None, db=None, user_id=None, model_preference=None):
         """Save API credentials to .env file and/or database"""
         config = APIConfigManager.get_api_config_by_service(service_id)
         if not config:
@@ -150,6 +150,16 @@ class APIConfigManager:
                 success = False
                 message += f"Failed to update {config.get('env_var_secret')} in .env file. "
         
+        # Handle model preference for AI services like Ollama
+        if model_preference and service_id == "ollama":
+            env_success = APIConfigManager.update_env_file("OLLAMA_MODEL", model_preference)
+            if not env_success:
+                success = False
+                message += "Failed to update OLLAMA_MODEL in .env file. "
+            else:
+                # Set for immediate use in this session
+                os.environ["OLLAMA_MODEL"] = model_preference
+        
         # Save to database if db and user_id are provided
         if db and user_id:
             try:
@@ -163,6 +173,9 @@ class APIConfigManager:
                 message += f"Database error: {str(e)}"
         
         if success and not message:
-            message = f"Successfully saved {config['name']} API credentials"
+            if model_preference and service_id == "ollama":
+                message = f"Successfully saved {config['name']} settings and model preference"
+            else:
+                message = f"Successfully saved {config['name']} API credentials"
         
         return success, message

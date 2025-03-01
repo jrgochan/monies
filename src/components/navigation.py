@@ -18,6 +18,7 @@ def sidebar_navigation():
         "Wallets": "👛",
         "Trade/Invest": "💸",
         "AI Insights": "🧠",
+        "Portfolio Optimizer": "📈",
         "Social Media": "📱",
         "Settings": "⚙️",
     }

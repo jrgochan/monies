@@ -32,6 +32,14 @@ try:
     client = OpenAI(api_key=openai_api_key)
 except Exception as e:
     logger.warning(f"Could not initialize OpenAI client: {str(e)}")
+    # Try without proxies parameter that might be causing the error
+    try:
+        import os
+        import openai
+        openai.api_key = os.getenv("OPENAI_API_KEY", "")
+        client = openai.OpenAI()
+    except Exception as e2:
+        logger.warning(f"Second attempt to initialize OpenAI client failed: {str(e2)}")
 
 # AI model settings
 from src.utils.api_config import APIConfigManager
@@ -209,14 +217,20 @@ def analyze_with_ollama(
         Analysis result as a string
     """
     base_url, default_model = get_ollama_settings()
+    
+    # Log info for debugging
+    logger.info(f"Ollama analysis request with params: model={model}, task_type={task_type}")
+    logger.info(f"Base URL from settings: {base_url}, Default model: {default_model}")
 
     # If no model specified, select the best model for the task
     if model is None:
         try:
             model = select_best_ollama_model(task_type)
+            logger.info(f"Selected model based on task: {model}")
         except Exception as e:
             logger.warning(f"Failed to select best model: {str(e)}. Using default.")
             model = default_model
+            logger.info(f"Using default model: {model}")
 
     # Customize system prompt based on task type
     system_prompt = ""
@@ -234,22 +248,47 @@ def analyze_with_ollama(
 
     try:
         # Make API call to Ollama
+        request_url = f"{base_url}api/generate"
+        request_body = {
+            "model": model,
+            "prompt": final_prompt,
+            "system": system_prompt,  # Some models support system parameter
+            "stream": False,
+        }
+        
+        logger.info(f"Making Ollama API request to: {request_url}")
+        logger.info(f"Request body: model={model}, prompt length={len(final_prompt)}, system prompt length={len(system_prompt)}")
+        
         response = requests.post(
-            f"{base_url}api/generate",
-            json={
-                "model": model,
-                "prompt": final_prompt,
-                "system": system_prompt,  # Some models support system parameter
-                "stream": False,
-            },
+            request_url,
+            json=request_body,
+            timeout=60  # Add a timeout to prevent hanging requests
         )
 
+        logger.info(f"Ollama API response status: {response.status_code}")
+        
         if response.status_code == 200:
-            return response.json()["response"]
+            response_json = response.json()
+            if "response" in response_json:
+                return response_json["response"]
+            else:
+                logger.error(f"Unexpected Ollama API response format: {response_json}")
+                return "Error: Unexpected API response format"
+        elif response.status_code == 404:
+            logger.error(f"Ollama API error 404: Model '{model}' not found or Ollama server not running")
+            return f"Error: Model '{model}' not found or Ollama server not running. Please check your Ollama installation."
         else:
             logger.error(f"Ollama API error: {response.status_code} - {response.text}")
-            return f"Error: {response.status_code}"
+            return f"Error: {response.status_code} - {response.text}"
 
+    except requests.exceptions.Timeout:
+        logger.error("Ollama API request timed out after 60 seconds")
+        return "Error: Request to Ollama server timed out. The server may be busy or not responding."
+        
+    except requests.exceptions.ConnectionError as ce:
+        logger.error(f"Connection error to Ollama API: {str(ce)}")
+        return "Error: Could not connect to Ollama server. Please ensure the server is running and accessible."
+        
     except Exception as e:
         logger.error(f"Error with Ollama analysis: {str(e)}")
         return f"Error: {str(e)}"
@@ -755,11 +794,15 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                         # Try OpenAI first, fall back to Ollama
                         try:
                             result["analysis"] = analyze_with_openai(prompt)
+                            result["model_used"] = "OpenAI"
                         except Exception as e:
                             logger.error(
                                 f"OpenAI analysis failed, falling back to Ollama: {str(e)}"
                             )
-                            result["analysis"] = analyze_with_ollama(prompt)
+                            # Get user's preferred model from settings
+                            _, configured_model = get_ollama_settings()
+                            result["analysis"] = analyze_with_ollama(prompt, model=configured_model)
+                            result["model_used"] = f"Ollama ({configured_model})"
                     except Exception as e:
                         logger.error(f"Error generating analysis: {str(e)}")
                         result["analysis"] = f"Error generating analysis: {str(e)}"
@@ -801,11 +844,15 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                         # Try OpenAI first, fall back to Ollama
                         try:
                             result["analysis"] = analyze_with_openai(prompt)
+                            result["model_used"] = "OpenAI"
                         except Exception as e:
                             logger.error(
                                 f"OpenAI analysis failed, falling back to Ollama: {str(e)}"
                             )
-                            result["analysis"] = analyze_with_ollama(prompt)
+                            # Get user's preferred model from settings
+                            _, configured_model = get_ollama_settings()
+                            result["analysis"] = analyze_with_ollama(prompt, model=configured_model)
+                            result["model_used"] = f"Ollama ({configured_model})"
                     except Exception as e:
                         logger.error(f"Error generating analysis: {str(e)}")
                         result["analysis"] = f"Error generating analysis: {str(e)}"
@@ -976,11 +1023,15 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
             # Try OpenAI first, fall back to Ollama
             try:
                 result["analysis"] = analyze_with_openai(prompt)
+                result["model_used"] = "OpenAI"
             except Exception as e:
                 logger.error(
                     f"OpenAI analysis failed, falling back to Ollama: {str(e)}"
                 )
-                result["analysis"] = analyze_with_ollama(prompt)
+                # Get user's preferred model from settings
+                _, configured_model = get_ollama_settings()
+                result["analysis"] = analyze_with_ollama(prompt, model=configured_model)
+                result["model_used"] = f"Ollama ({configured_model})"
 
             result["success"] = True
         except Exception as e:
@@ -1196,12 +1247,12 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
 
             # Try to use Ollama first, fall back to OpenAI if that fails
             try:
-                # Select the best Ollama model for finance task
-                model = select_best_ollama_model("finance")
+                # Get the configured model from environment instead of auto-selecting
+                _, configured_model = get_ollama_settings()
                 result["analysis"] = analyze_with_ollama(
-                    prompt, model=model, task_type="finance"
+                    prompt, model=configured_model, task_type="finance"
                 )
-                result["model_used"] = f"Ollama ({model})"
+                result["model_used"] = f"Ollama ({configured_model})"
             except Exception as e:
                 logger.error(f"Error with Ollama analysis: {str(e)}")
                 try:
@@ -1343,15 +1394,20 @@ def get_etf_recommendations(
 
             try:
                 result["analysis"] = analyze_with_openai(prompt, task_type="finance")
+                result["model_used"] = "OpenAI"
             except Exception as e:
                 try:
+                    # Get user's preferred model from settings
+                    _, configured_model = get_ollama_settings()
                     result["analysis"] = analyze_with_ollama(
-                        prompt, task_type="finance"
+                        prompt, model=configured_model, task_type="finance"
                     )
+                    result["model_used"] = f"Ollama ({configured_model})"
                 except:
                     result[
                         "analysis"
                     ] = f"These ETFs are tailored for {risk_profile} investors, providing a balanced approach to market exposure. Consider individual research before investing."
+                    result["model_used"] = "Fallback (no model)"
 
             result["success"] = True
 
@@ -1391,18 +1447,49 @@ def analyze_with_best_model(
     except Exception as e:
         logger.warning(f"OpenAI analysis failed, trying Ollama: {str(e)}")
 
-        # Fall back to Ollama with automatic model selection
+        # First try with user's preferred model
         try:
-            return analyze_with_ollama(prompt, model=None, task_type=task_type)
+            # Get user's preferred model from settings
+            _, configured_model = get_ollama_settings()
+            logger.info(f"Trying user-configured model: {configured_model}")
+            
+            result = analyze_with_ollama(prompt, model=configured_model, task_type=task_type)
+            
+            # Check if the result indicates a 404 error (model not found)
+            if "Error: 404" in result or "Error: Model" in result:
+                # If 404, try one more time with most basic model (llama2)
+                logger.warning(f"Model {configured_model} not found, falling back to basic model")
+                raise ValueError(f"Model {configured_model} not found: {result}")
+                
+            return result
+            
         except Exception as e2:
-            logger.error(f"All AI analysis methods failed: {str(e2)}")
+            logger.warning(f"First Ollama attempt failed: {str(e2)}, trying fallback model")
+            
+            # Try a final time with a simple, common model that should exist
+            try:
+                fallback_models = ["llama2", "mistral", "gemma:2b"]
+                
+                for fallback_model in fallback_models:
+                    try:
+                        logger.info(f"Trying fallback model: {fallback_model}")
+                        return analyze_with_ollama(prompt, model=fallback_model, task_type=task_type)
+                    except Exception as model_error:
+                        logger.warning(f"Fallback model {fallback_model} failed: {str(model_error)}")
+                        continue
+                        
+                # If all models failed, raise the error to trigger the fallback message
+                raise ValueError("All Ollama models failed")
+                
+            except Exception as e3:
+                logger.error(f"All AI analysis methods and fallbacks failed: {str(e3)}")
 
-            # Use fallback message or generate a generic one
-            if fallback_message:
-                return fallback_message
-            return (
-                "Analysis could not be generated at this time. Please try again later."
-            )
+                # Use fallback message or generate a generic one
+                if fallback_message:
+                    return fallback_message
+                return (
+                    "Analysis could not be generated at this time. Please try again later."
+                )
 
 
 def generate_generic_analysis(prompt: str) -> str:

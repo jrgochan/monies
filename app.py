@@ -48,6 +48,10 @@ def main():
         from src.pages.ai_insights import show_ai_insights
 
         show_ai_insights()
+    elif page == "Portfolio Optimizer":
+        from src.pages.portfolio_optimizer import show_portfolio_optimizer
+
+        show_portfolio_optimizer()
     elif page == "Social Media":
         from src.pages.social_media import show_social_media
 

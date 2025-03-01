@@ -1,0 +1,3 @@
+- Please now add a new section to the interface navigation that allows the user to select from n+1 different trading   │
+│   strategies that they can apply to the instructions that get sent to the ollama model for financial analysis. Please  │
+│   ensure you implement the top three best trading strategies.
