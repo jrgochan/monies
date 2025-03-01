@@ -1,9 +1,12 @@
 import streamlit as st
 
 
-def sidebar_navigation():
+def sidebar_navigation() -> str:
     """
     Creates the sidebar navigation and returns the selected page.
+
+    Returns:
+        str: The selected page name
     """
     # Display user info if logged in
     if "user" in st.session_state:
@@ -45,4 +48,4 @@ def sidebar_navigation():
     st.sidebar.markdown("---")
     st.sidebar.caption("© 2025 Crypto Wallet & Trend Analysis")
 
-    return page
+    return str(page)

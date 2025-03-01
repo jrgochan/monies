@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from typing import Any, Generator
 
 from dotenv import load_dotenv
 from sqlalchemy import (
@@ -233,12 +234,12 @@ class PortfolioOptimization(Base):
 
 
 # Create all tables
-def init_db():
+def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
 
 # Get a database session
-def get_db():
+def get_db() -> Generator[Any, None, None]:
     db = SessionLocal()
     try:
         yield db

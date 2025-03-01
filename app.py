@@ -1,5 +1,6 @@
 import streamlit as st
 from dotenv import load_dotenv
+
 from src.components.navigation import sidebar_navigation
 from src.utils.auth import handle_oauth_callback
 
@@ -15,7 +16,7 @@ st.set_page_config(
 )
 
 
-def main():
+def main() -> None:
     # Handle OAuth callback if present
     handle_oauth_callback()
 

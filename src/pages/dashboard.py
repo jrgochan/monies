@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import plotly.express as px
@@ -9,7 +10,7 @@ from src.models.database import Balance, SessionLocal, Transaction, Wallet
 from src.utils.auth import require_login
 
 
-def load_user_wallets(user_id):
+def load_user_wallets(user_id: int) -> List[Wallet]:
     """Load user's wallets from database"""
     db = SessionLocal()
     try:
@@ -19,7 +20,7 @@ def load_user_wallets(user_id):
         db.close()
 
 
-def load_wallet_balances(wallet_id):
+def load_wallet_balances(wallet_id: int) -> List[Balance]:
     """Load wallet balances from database"""
     db = SessionLocal()
     try:
@@ -29,20 +30,23 @@ def load_wallet_balances(wallet_id):
         db.close()
 
 
-def get_portfolio_value(wallets):
+def get_portfolio_value(
+    wallets: List[Wallet],
+) -> Tuple[float, Dict[str, float], Dict[str, Union[float, str, Any]]]:
     """Calculate total portfolio value with current prices"""
     total_value = 0
-    portfolio = {}
+    portfolio: Dict[str, float] = {}
     all_currencies = set()
 
     # Get balances for each wallet
     for wallet in wallets:
         balances = load_wallet_balances(wallet.id)
         for balance in balances:
-            if balance.currency not in portfolio:
-                portfolio[balance.currency] = 0
-            portfolio[balance.currency] += balance.amount
-            all_currencies.add(balance.currency)
+            if isinstance(balance, Balance):  # Type check for mypy
+                if balance.currency not in portfolio:
+                    portfolio[balance.currency] = 0
+                portfolio[balance.currency] += balance.amount
+                all_currencies.add(balance.currency)
 
     # Get current prices from exchange API (using Binance.US)
     prices = get_current_prices("binanceus", list(all_currencies))
@@ -59,7 +63,7 @@ def get_portfolio_value(wallets):
     return total_value, portfolio, prices
 
 
-def get_recent_transactions(user_id, limit=5):
+def get_recent_transactions(user_id: int, limit: int = 5) -> List[Transaction]:
     """Get recent transactions for the user"""
     db = SessionLocal()
     try:
@@ -75,7 +79,7 @@ def get_recent_transactions(user_id, limit=5):
         db.close()
 
 
-def get_portfolio_history(wallets=None):
+def get_portfolio_history(wallets: Optional[List[Wallet]] = None) -> pd.DataFrame:
     """Get portfolio history data. This function returns an error flag
     if it cannot connect to external data sources.
     """
@@ -162,19 +166,26 @@ def get_portfolio_history(wallets=None):
     )
 
 
-def get_asset_allocation(portfolio, prices):
+def get_asset_allocation(
+    portfolio: Dict[str, float], prices: Dict[str, Union[float, str, Any]]
+) -> List[Dict[str, Any]]:
     """Calculate asset allocation for portfolio"""
     allocation = []
 
     for currency, amount in portfolio.items():
         if currency in prices:
-            value = amount * prices[currency]
-            allocation.append({"currency": currency, "amount": amount, "value": value})
+            price_value = prices[currency]
+            # Handle case where price might be a string or other type
+            if isinstance(price_value, (int, float)):
+                value = amount * price_value
+                allocation.append(
+                    {"currency": currency, "amount": amount, "value": value}
+                )
 
     return allocation
 
 
-def show_dashboard():
+def show_dashboard() -> None:
     """Display the dashboard page"""
     # Require login
     user = require_login()

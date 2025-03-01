@@ -11,6 +11,7 @@ import os
 import tempfile
 import time
 from datetime import datetime, timedelta
+from typing import List, Optional
 
 import plotly.express as px
 import streamlit as st
@@ -22,8 +23,8 @@ from src.api.social_media import (
     post_to_facebook,
     post_to_linkedin,
     post_to_twitter,
-    schedule_post,
 )
+from src.api.social_media import schedule_post as api_schedule_post
 from src.models.database import SessionLocal, SocialAccount
 from src.utils.auth import require_login
 from src.utils.security import get_api_key, store_api_key
@@ -32,7 +33,7 @@ from src.utils.security import get_api_key, store_api_key
 # This file should be imported as src.pages.social_media_page
 
 
-def get_user_social_accounts(user_id):
+def get_user_social_accounts(user_id: int) -> List[SocialAccount]:
     """Get all social media accounts for a user."""
     db = SessionLocal()
     try:
@@ -44,7 +45,13 @@ def get_user_social_accounts(user_id):
         db.close()
 
 
-def add_social_account(user_id, platform, username, token, token_secret=None):
+def add_social_account(
+    user_id: int,
+    platform: str,
+    username: str,
+    token: str,
+    token_secret: Optional[str] = None,
+) -> Optional[SocialAccount]:
     """Add a new social media account for a user."""
     db = SessionLocal()
     try:
@@ -86,7 +93,7 @@ def add_social_account(user_id, platform, username, token, token_secret=None):
         db.close()
 
 
-def delete_social_account(account_id):
+def delete_social_account(account_id: int) -> bool:
     """Delete a social media account."""
     db = SessionLocal()
     try:
@@ -313,7 +320,7 @@ def show_post_section(user_id):
 
             # Submit button
             submitted = st.form_submit_button(
-                "Post" if not schedule_post else "Schedule"
+                "Post" if not should_schedule else "Schedule"
             )
 
             if submitted:
@@ -321,7 +328,11 @@ def show_post_section(user_id):
                     st.error("Please select at least one platform to post to")
                 elif not content:
                     st.error("Post content is required")
-                elif schedule_post and scheduled_time < datetime.now():
+                elif (
+                    should_schedule
+                    and scheduled_time
+                    and scheduled_time < datetime.now()
+                ):
                     st.error("Scheduled time must be in the future")
                 else:
                     # Save media file if provided
@@ -335,10 +346,10 @@ def show_post_section(user_id):
                             media_path = tmp.name
 
                     # Post or schedule
-                    if schedule_post:
+                    if should_schedule and scheduled_time:
                         # Schedule the post
                         for platform in selected_platforms:
-                            result = schedule_post(
+                            result = api_schedule_post(
                                 user_id=user_id,
                                 platform=platform,
                                 content=content,
@@ -346,13 +357,20 @@ def show_post_section(user_id):
                                 media_path=media_path,
                             )
 
-                            if result["success"]:
+                            if isinstance(result, dict) and result.get(
+                                "success", False
+                            ):
                                 st.success(
                                     f"Post scheduled for {platform.capitalize()} at {scheduled_time.strftime('%Y-%m-%d %H:%M')}"
                                 )
                             else:
+                                error_msg = (
+                                    result.get("message", "Unknown error")
+                                    if isinstance(result, dict)
+                                    else "Unknown error"
+                                )
                                 st.error(
-                                    f"Error scheduling post for {platform.capitalize()}: {result['message']}"
+                                    f"Error scheduling post for {platform.capitalize()}: {error_msg}"
                                 )
                     else:
                         # Post immediately

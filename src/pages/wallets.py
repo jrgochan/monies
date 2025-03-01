@@ -1,4 +1,5 @@
 import time
+from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -13,7 +14,7 @@ from src.utils.auth import require_login
 from src.utils.security import get_api_key, store_api_key
 
 
-def get_user_wallets(user_id):
+def get_user_wallets(user_id: int) -> List[Wallet]:
     """Get all wallets for a user"""
     db = SessionLocal()
     try:
@@ -23,7 +24,13 @@ def get_user_wallets(user_id):
         db.close()
 
 
-def add_wallet(user_id, name, wallet_type, exchange=None, address=None):
+def add_wallet(
+    user_id: int,
+    name: str,
+    wallet_type: str,
+    exchange: Optional[str] = None,
+    address: Optional[str] = None,
+) -> Optional[Wallet]:
     """Add a new wallet for a user"""
     db = SessionLocal()
     try:
@@ -49,7 +56,9 @@ def add_wallet(user_id, name, wallet_type, exchange=None, address=None):
         db.close()
 
 
-def update_wallet_balances(wallet_id, balances_data):
+def update_wallet_balances(
+    wallet_id: int, balances_data: Dict[str, Dict[str, float]]
+) -> bool:
     """Update balances for a wallet"""
     db = SessionLocal()
     try:
@@ -73,7 +82,7 @@ def update_wallet_balances(wallet_id, balances_data):
         db.close()
 
 
-def delete_wallet(wallet_id):
+def delete_wallet(wallet_id: int) -> bool:
     """Delete a wallet"""
     db = SessionLocal()
     try:
@@ -93,7 +102,7 @@ def delete_wallet(wallet_id):
         db.close()
 
 
-def get_wallet_balances(wallet_id):
+def get_wallet_balances(wallet_id: int) -> List[Balance]:
     """Get balances for a wallet"""
     db = SessionLocal()
     try:
@@ -104,8 +113,14 @@ def get_wallet_balances(wallet_id):
 
 
 def add_transaction(
-    user_id, wallet_id, transaction_type, currency, amount, price=None, notes=None
-):
+    user_id: int,
+    wallet_id: int,
+    transaction_type: str,
+    currency: str,
+    amount: float,
+    price: Optional[float] = None,
+    notes: Optional[str] = None,
+) -> bool:
     """Add a new transaction"""
     db = SessionLocal()
     try:
@@ -152,7 +167,7 @@ def add_transaction(
         db.close()
 
 
-def get_wallet_transactions(wallet_id):
+def get_wallet_transactions(wallet_id: int) -> List[Transaction]:
     """Get transactions for a wallet"""
     db = SessionLocal()
     try:
@@ -168,7 +183,7 @@ def get_wallet_transactions(wallet_id):
         db.close()
 
 
-def show_add_wallet_form(user_id):
+def show_add_wallet_form(user_id: int) -> None:
     """Display form to add a new wallet"""
     with st.expander("Add New Wallet", expanded=False):
         with st.form("add_wallet_form"):
@@ -328,7 +343,9 @@ def show_add_wallet_form(user_id):
                     st.rerun()
 
 
-def show_wallet_card(wallet, user_id, prices=None):
+def show_wallet_card(
+    wallet: Wallet, user_id: int, prices: Optional[Dict[str, float]] = None
+) -> None:
     """Display a wallet card with balances and actions"""
     with st.container(border=True):
         # Header row with wallet name and options
@@ -339,12 +356,13 @@ def show_wallet_card(wallet, user_id, prices=None):
             if wallet.wallet_type == "exchange":
                 st.caption(f"Exchange: {wallet.exchange}")
             elif wallet.wallet_type in ["on-chain", "hardware", "mobile", "browser"]:
-                wallet_type_display = {
-                    "on-chain": "On-chain Wallet",
-                    "hardware": "Hardware Wallet",
-                    "mobile": "Mobile Wallet",
-                    "browser": "Browser Wallet",
-                }.get(wallet.wallet_type, wallet.wallet_type)
+                wallet_type_display = "On-chain Wallet"
+                if wallet.wallet_type == "hardware":
+                    wallet_type_display = "Hardware Wallet"
+                elif wallet.wallet_type == "mobile":
+                    wallet_type_display = "Mobile Wallet"
+                elif wallet.wallet_type == "browser":
+                    wallet_type_display = "Browser Wallet"
 
                 st.caption(
                     f"{wallet_type_display}: {wallet.address[:10]}...{wallet.address[-6:]}"
@@ -579,23 +597,32 @@ def show_wallet_card(wallet, user_id, prices=None):
                 st.subheader("Send Crypto")
 
                 # Get wallet balances
-                balances = get_wallet_balances(wallet.id)
+                wallet_balances = get_wallet_balances(wallet.id)
 
-                if not balances:
+                if not wallet_balances:
                     st.warning("No funds available to send")
                 else:
                     # Create a form to send crypto
                     with st.form(f"send_form_{wallet.id}"):
                         # Create dropdown with available currencies
-                        currency_options = [b.currency for b in balances]
+                        currency_options = [
+                            b.currency
+                            for b in wallet_balances
+                            if isinstance(b, Balance)
+                        ]
                         currency = st.selectbox("Currency", options=currency_options)
 
                         # Get current balance for selected currency
                         selected_balance = next(
-                            (b for b in balances if b.currency == currency), None
+                            (
+                                b
+                                for b in wallet_balances
+                                if isinstance(b, Balance) and b.currency == currency
+                            ),
+                            None,
                         )
 
-                        if selected_balance:
+                        if selected_balance and isinstance(selected_balance, Balance):
                             st.info(f"Available: {selected_balance.amount} {currency}")
 
                             amount = st.number_input(
@@ -774,9 +801,9 @@ def show_wallet_card(wallet, user_id, prices=None):
         # Display balances
         st.subheader("Balances")
 
-        balances = get_wallet_balances(wallet.id)
+        wallet_balances = get_wallet_balances(wallet.id)
 
-        if not balances:
+        if not wallet_balances:
             st.info("No balances found. Click 'Refresh' to update from exchange.")
         else:
             # Mock prices for demo
@@ -793,25 +820,34 @@ def show_wallet_card(wallet, user_id, prices=None):
 
             # Create a table of balances
             balance_data = []
-            for balance in balances:
-                price = prices.get(balance.currency, 0)
-                usd_value = balance.amount * price
+            for balance in wallet_balances:
+                if isinstance(balance, Balance):  # Type check to satisfy mypy
+                    # Safe type handling for mypy
+                    if (
+                        prices
+                        and isinstance(balance.currency, str)
+                        and balance.currency in prices
+                    ):
+                        price = prices[balance.currency]
+                    else:
+                        price = 0
+                    usd_value = balance.amount * price
 
-                balance_data.append(
-                    {
-                        "Currency": balance.currency,
-                        "Amount": f"{balance.amount:.8f}".rstrip("0").rstrip("."),
-                        "Price": f"${price:,.2f}" if price > 0 else "-",
-                        "Value (USD)": f"${usd_value:,.2f}" if price > 0 else "-",
-                    }
-                )
+                    balance_data.append(
+                        {
+                            "Currency": balance.currency,
+                            "Amount": f"{balance.amount:.8f}".rstrip("0").rstrip("."),
+                            "Price": f"${price:,.2f}" if price > 0 else "-",
+                            "Value (USD)": f"${usd_value:,.2f}" if price > 0 else "-",
+                        }
+                    )
 
             # Display as dataframe
             balance_df = pd.DataFrame(balance_data)
             st.dataframe(balance_df, hide_index=True, use_container_width=True)
 
 
-def show_wallets():
+def show_wallets() -> None:
     """Display the wallets page"""
     # Require login
     user = require_login()

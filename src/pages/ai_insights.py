@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime, timedelta
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -26,7 +27,12 @@ from src.utils.ai_helpers import (
 from src.utils.auth import require_login
 
 
-def cache_analysis(query, result, model_used, expiry_hours=24):
+def cache_analysis(
+    query: str,
+    result: Union[str, Dict[str, Any]],
+    model_used: str,
+    expiry_hours: int = 24,
+) -> bool:
     """Cache analysis results in the database"""
     db = SessionLocal()
     try:
@@ -69,7 +75,9 @@ def cache_analysis(query, result, model_used, expiry_hours=24):
         db.close()
 
 
-def get_cached_analysis(query):
+def get_cached_analysis(
+    query: str,
+) -> Tuple[Optional[Union[Dict[str, Any], str]], Optional[str]]:
     """Get cached analysis if available and not expired"""
     db = SessionLocal()
     try:
@@ -97,7 +105,7 @@ def get_cached_analysis(query):
         db.close()
 
 
-def show_stock_analysis():
+def show_stock_analysis() -> None:
     """Show stock analysis section"""
     st.subheader("Stock Trend Analysis")
 
@@ -274,7 +282,7 @@ def show_stock_analysis():
             st.error(f"Error in analysis: {result.get('analysis', 'Unknown error')}")
 
 
-def show_crypto_analysis():
+def show_crypto_analysis() -> None:
     """Show cryptocurrency analysis section"""
     st.subheader("Cryptocurrency Trend Analysis")
 
@@ -472,7 +480,7 @@ def show_crypto_analysis():
             st.error(f"Error in analysis: {result.get('analysis', 'Unknown error')}")
 
 
-def show_etf_recommendations():
+def show_etf_recommendations() -> None:
     """Show ETF recommendations section"""
     st.subheader("ETF Investment Recommendations")
 
@@ -611,7 +619,7 @@ def show_etf_recommendations():
             st.error(f"Error in analysis: {result.get('analysis', 'Unknown error')}")
 
 
-def show_custom_analysis():
+def show_custom_analysis() -> None:
     """Show custom AI analysis section"""
     st.subheader("Custom Market Analysis")
 
@@ -748,7 +756,7 @@ def show_custom_analysis():
         st.markdown(result)
 
 
-def show_ai_insights():
+def show_ai_insights() -> None:
     """Display the AI Insights page"""
     # Require login
     require_login()

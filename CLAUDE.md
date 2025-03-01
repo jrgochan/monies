@@ -46,8 +46,9 @@ Monies is a comprehensive cryptocurrency portfolio management and market analysi
 - **Security**: Never hardcode secrets, use environment variables via python-dotenv
 - **Testing**: Write tests for all new functionality, use pytest fixtures when appropriate
 - **SQLAlchemy**: Use ORM models, proper relationship definitions, session management
-- **Streamlit**: Use st.cache for expensive operations, organize pages with proper hierarchy
+- **Streamlit**: Use st.cache_data or st.cache_resource for expensive operations, organize pages with proper hierarchy
 - **API Clients**: Use proper error handling and rate limiting for external API calls
+- **Code Reviews**: Always run linting and type checking before submitting for review
 
 ## Data Source and Caching Guidelines
 - **ALWAYS** prefer live data from APIs over cached data
@@ -67,6 +68,9 @@ Monies is a comprehensive cryptocurrency portfolio management and market analysi
 - **Environment Variables**: Store sensitive configuration in environment variables
 - **Rate Limiting**: Implement rate limiting for API endpoints
 - **Input Validation**: Validate all user inputs to prevent injection attacks
+- **Dependency Scanning**: Regularly scan and update dependencies for security vulnerabilities
+- **Secrets Management**: Never log, print, or expose secrets in debug output or error messages
+- **Access Control**: Implement proper role-based access controls for all API endpoints
 
 ## OAuth Integration
 - **Supported Providers**: Google, Coinbase, Facebook, Twitter, GitHub, Microsoft
@@ -82,5 +86,14 @@ Monies is a comprehensive cryptocurrency portfolio management and market analysi
 - **Wallet Balance**: View balances across exchanges with automatic updates
 - **Transaction History**: View transaction history from connected exchanges
 - **Trading**: Execute trades directly from the application
+
+## AI Integration Guidelines
+- **API Usage**: Always use environment variables for API keys to AI services
+- **Rate Limiting**: Implement proper rate limiting for AI API calls
+- **Error Handling**: Gracefully handle AI service unavailability
+- **Prompt Management**: Store and version AI prompts in dedicated files
+- **Content Filtering**: Implement appropriate content filtering for AI-generated outputs
+- **User Feedback**: Provide mechanisms for users to report inappropriate AI responses
+- **Transparency**: Clearly indicate to users when content is AI-generated
 
 Remember to keep database interactions secure and properly handle encryption/decryption for sensitive data.

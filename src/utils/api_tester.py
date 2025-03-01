@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 import ccxt
 import requests
 from dotenv import load_dotenv
-from openai import APIConnectionError, BadRequestError, OpenAI
+from openai import APIConnectionError, AuthenticationError, BadRequestError, OpenAI
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +36,9 @@ class APITester:
         except APIConnectionError as e:
             logger.error(f"OpenAI API connection failed: {str(e)}")
             return False, "Failed to connect to OpenAI API: Connection error"
+        except AuthenticationError as e:
+            logger.error(f"OpenAI API authentication failed: {str(e)}")
+            return False, "Invalid API key or authentication error"
         except BadRequestError as e:
             logger.error(f"OpenAI API request error: {str(e)}")
             return False, f"OpenAI API request error: {str(e)}"
@@ -280,7 +283,6 @@ class APITester:
             import hmac
 
             # json is already imported at the top
-
             # Base URL for Gemini API
             url = "https://api.gemini.com/v1/account"
 

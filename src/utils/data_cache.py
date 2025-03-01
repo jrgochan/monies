@@ -109,13 +109,73 @@ class MarketDataCache:
 
         if data:
             try:
-                # Convert the data to a DataFrame
+                # Check the format of the cached data
+                if "has_datetime_index" in data and data["has_datetime_index"]:
+                    # Handle the new datetime-preserving format
+                    if "index_values" in data:
+                        # Reconstruct with timestamp values
+                        df = pd.DataFrame(data["prices"])
+                        # Convert int64 timestamps back to datetime index
+                        datetime_index = pd.to_datetime(data["index_values"], unit="ns")
+                        df.index = datetime_index
+                        return df
+                    elif "date_column" in data:
+                        # Use the stored date column
+                        df = pd.DataFrame(data["prices"])
+                        date_col = data["date_column"]
+                        if date_col in df.columns:
+                            df[date_col] = pd.to_datetime(df[date_col])
+                            df.set_index(date_col, inplace=True)
+                            return df
+
+                # Fall back to the old format
                 df = pd.DataFrame(data["prices"])
 
                 # Convert date strings to datetime
-                if "date" in df.columns:
-                    df["date"] = pd.to_datetime(df["date"])
-                    df.set_index("date", inplace=True)
+                date_columns = ["date", "Date"]
+                for col in date_columns:
+                    if col in df.columns:
+                        try:
+                            df[col] = pd.to_datetime(df[col], errors="coerce")
+                            # Check if we have valid dates after conversion
+                            if df[col].notna().any():
+                                # Skip if invalid dates detected
+                                valid_dates = df[col][df[col].notna()]
+                                if not valid_dates.empty:
+                                    min_year = valid_dates.dt.year.min()
+                                    if min_year <= 1970:
+                                        logger.warning(
+                                            f"Invalid dates detected in cached data (epoch)"
+                                        )
+                                        return None
+                                df.set_index(col, inplace=True)
+                                return df
+                        except Exception as e:
+                            logger.warning(
+                                f"Error converting {col} to datetime: {str(e)}"
+                            )
+
+                # Try the index column as a fallback
+                if "index" in df.columns:
+                    try:
+                        df["index"] = pd.to_datetime(df["index"], errors="coerce")
+                        if df["index"].notna().any():
+                            valid_dates = df["index"][df["index"].notna()]
+                            if not valid_dates.empty:
+                                min_year = valid_dates.dt.year.min()
+                                if min_year <= 1970:
+                                    logger.warning(
+                                        f"Invalid dates detected in cached data (epoch)"
+                                    )
+                                    return None
+                            df.set_index("index", inplace=True)
+                            return df
+                    except Exception as e:
+                        logger.warning(f"Error converting index to datetime: {str(e)}")
+
+                # If we got here, no valid date column was found
+                logger.warning("No valid date column found in cached data")
+                return None
 
                 return df
             except Exception as e:
@@ -155,25 +215,28 @@ class MarketDataCache:
                 # Handle DataFrame with datetime index
                 if isinstance(data.index, pd.DatetimeIndex):
                     try:
-                        # Reset index to include the dates as a column
-                        data_reset = data.reset_index()
-                        # Get the name of the index column (usually 'date' or 'Date' or 'index')
-                        date_col = data_reset.columns[0]
-                        # Convert datetime objects to strings
-                        data_reset[date_col] = data_reset[date_col].dt.strftime(
-                            "%Y-%m-%d"
-                        )
-                        # Convert to dict
-                        data_dict = {"prices": data_reset.to_dict(orient="records")}
+                        # Create a copy to avoid modifying the original
+                        data_copy = data.copy()
+                        # Preserve the DatetimeIndex by converting it to timestamp int64 values
+                        # This allows round-trip conversion without losing datetime precision
+                        data_dict = {
+                            "prices": data_copy.to_dict(orient="records"),
+                            "index_values": data_copy.index.astype(int).tolist(),
+                            "has_datetime_index": True,
+                        }
                     except Exception as e:
                         logger.error(
                             f"Error processing DataFrame with DatetimeIndex: {str(e)}"
                         )
-                        # Fallback: convert to a simpler format with string dates
+                        # Fallback: convert to a format that preserves date strings
                         try:
-                            simple_df = data.copy()
-                            simple_df.index = simple_df.index.strftime("%Y-%m-%d")
-                            data_dict = {"prices": simple_df.to_dict()}
+                            data_reset = data.reset_index()
+                            date_col = data_reset.columns[0]
+                            data_dict = {
+                                "prices": data_reset.to_dict(orient="records"),
+                                "date_column": date_col,
+                                "has_datetime_index": True,
+                            }
                         except Exception as e2:
                             logger.error(
                                 f"Fallback serialization also failed: {str(e2)}"

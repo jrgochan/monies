@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union, cast
+from typing import Any, Dict, List, Optional, Tuple
 
 import openai
 import pandas as pd

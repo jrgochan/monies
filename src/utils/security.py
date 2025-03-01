@@ -1,4 +1,5 @@
 import os
+from typing import Any, List, Optional, Tuple
 
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
@@ -22,7 +23,7 @@ if not SECRET_KEY or len(SECRET_KEY) < 32:
 
 
 # Ensure the key is in bytes and padded/truncated to 32 bytes for Fernet
-def get_fernet_key(key_str):
+def get_fernet_key(key_str: Optional[str]) -> bytes:
     """Convert string key to a valid Fernet key."""
     if not key_str:
         return Fernet.generate_key()
@@ -41,12 +42,12 @@ def get_fernet_key(key_str):
 cipher = Fernet(get_fernet_key(SECRET_KEY))
 
 
-def generate_key():
+def generate_key() -> bytes:
     """Generate a new Fernet key (test-compatible function)."""
     return Fernet.generate_key()
 
 
-def encrypt_data(data: str, key=None) -> str:
+def encrypt_data(data: str, key: Optional[bytes] = None) -> Optional[str]:
     """Encrypt a string using Fernet symmetric encryption."""
     if not data:
         return None
@@ -59,7 +60,7 @@ def encrypt_data(data: str, key=None) -> str:
         return cipher.encrypt(data.encode("utf-8")).decode("utf-8")
 
 
-def decrypt_data(encrypted_data: str, key=None) -> str:
+def decrypt_data(encrypted_data: str, key: Optional[bytes] = None) -> Optional[str]:
     """Decrypt a Fernet-encrypted string."""
     if not encrypted_data:
         return None
@@ -72,7 +73,9 @@ def decrypt_data(encrypted_data: str, key=None) -> str:
         return cipher.decrypt(encrypted_data.encode("utf-8")).decode("utf-8")
 
 
-def store_api_key(db, user_id, service, api_key, api_secret=None):
+def store_api_key(
+    db: Any, user_id: int, service: str, api_key: str, api_secret: Optional[str] = None
+) -> Any:
     """Securely store API key and secret for a user."""
     from src.models.database import ApiKey
 
@@ -104,7 +107,9 @@ def store_api_key(db, user_id, service, api_key, api_secret=None):
         return api_key_obj
 
 
-def get_api_key(db, user_id, service, key_id=None):
+def get_api_key(
+    db: Any, user_id: int, service: str, key_id: Optional[int] = None
+) -> Tuple[Optional[str], Optional[str], Any]:
     """Retrieve and decrypt API key and secret for a user.
 
     Args:
@@ -144,7 +149,7 @@ def get_api_key(db, user_id, service, key_id=None):
     return decrypted_key, decrypted_secret, api_key
 
 
-def get_api_keys_for_service(db, user_id, service):
+def get_api_keys_for_service(db: Any, user_id: int, service: str) -> List[Any]:
     """Get all API keys for a specific service.
 
     Args:
@@ -166,7 +171,7 @@ def get_api_keys_for_service(db, user_id, service):
     return keys
 
 
-def set_default_api_key(db, user_id, service, key_id):
+def set_default_api_key(db: Any, user_id: int, service: str, key_id: int) -> bool:
     """Set a specific API key as the default for a service.
 
     Args:
@@ -206,14 +211,14 @@ def set_default_api_key(db, user_id, service, key_id):
 
 
 def store_oauth_api_key(
-    db,
-    user_id,
-    service,
-    api_key,
-    api_secret=None,
-    oauth_provider=None,
-    display_name=None,
-):
+    db: Any,
+    user_id: int,
+    service: str,
+    api_key: str,
+    api_secret: Optional[str] = None,
+    oauth_provider: Optional[str] = None,
+    display_name: Optional[str] = None,
+) -> Any:
     """Store an API key obtained via OAuth.
 
     Args:

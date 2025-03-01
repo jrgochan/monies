@@ -1,7 +1,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv, set_key
 
@@ -79,7 +79,7 @@ class APIConfigManager:
 
     @staticmethod
     def get_api_credentials(
-        service_id: str, user_id=None, key_id=None
+        service_id: str, user_id: Optional[int] = None, key_id: Optional[int] = None
     ) -> Tuple[str, str]:
         """Get API credentials for a service
 
@@ -124,10 +124,10 @@ class APIConfigManager:
     @staticmethod
     def test_api_connection(
         service_id: str,
-        key: str = None,
-        secret: str = None,
-        user_id: int = None,
-        key_id: int = None,
+        key: Optional[str] = None,
+        secret: Optional[str] = None,
+        user_id: Optional[int] = None,
+        key_id: Optional[int] = None,
     ) -> Tuple[bool, str]:
         """Test API connection
 
@@ -195,11 +195,11 @@ class APIConfigManager:
     def save_api_credentials(
         service_id: str,
         key: str,
-        secret: str = None,
-        db=None,
-        user_id=None,
-        model_preference=None,
-    ):
+        secret: Optional[str] = None,
+        db: Optional[Any] = None,
+        user_id: Optional[int] = None,
+        model_preference: Optional[str] = None,
+    ) -> Tuple[bool, str]:
         """Save API credentials to .env file and/or database"""
         config = APIConfigManager.get_api_config_by_service(service_id)
         if not config:

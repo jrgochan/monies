@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import ccxt
