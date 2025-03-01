@@ -116,6 +116,12 @@ class ApiKey(Base):
     encrypted_key = Column(Text)
     encrypted_secret = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    is_oauth = Column(Boolean, default=False)  # Whether this key is from OAuth
+    oauth_provider = Column(String(20), nullable=True)  # Which OAuth provider
+    is_default = Column(
+        Boolean, default=False
+    )  # Whether this is the default key for the service
+    display_name = Column(String(100), nullable=True)  # Display name for the key
 
     # Relationships
     user = relationship("User", back_populates="api_keys")

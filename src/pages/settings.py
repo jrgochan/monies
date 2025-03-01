@@ -2,17 +2,15 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
 
-from src.models.database import ApiKey, DataSource, SessionLocal, User, UserDataSource
+from src.models.database import ApiKey, SessionLocal, User
 from src.utils.api_config import APIConfigManager
-from src.utils.api_tester import APITester
 from src.utils.auth import hash_password, require_login
 from src.utils.data_aggregator import DataAggregator
-from src.utils.security import decrypt_data, encrypt_data, get_api_key, store_api_key
+from src.utils.security import store_api_key
 
 
 def update_user_password(user_id, new_password):
@@ -285,77 +283,300 @@ def show_account_settings(user):
                         st.error(message)
 
 
+def get_service_display_name(service):
+    """Get a friendly display name for a service"""
+    # Map of service IDs to display names
+    service_names = {
+        "coinbase": "Coinbase",
+        "twitter": "Twitter",
+        "facebook": "Facebook",
+        "github": "GitHub",
+        "openai": "OpenAI",
+        "ollama": "Ollama",
+        "yahoo_finance": "Yahoo Finance",
+        "binance": "Binance",
+        "alpaca": "Alpaca",
+        "alpha_vantage": "Alpha Vantage",
+    }
+
+    return service_names.get(service, service.capitalize())
+
+
 def show_api_key_settings(user_id):
     """Show API key management section"""
     st.subheader("API Key Management")
 
     # Get user's API keys
-    keys = get_user_api_keys(user_id)
+    db = SessionLocal()
+    try:
+        from src.utils.security import set_default_api_key
 
-    # Display keys
-    if keys:
-        key_data = []
+        # Get all user keys
+        keys = get_user_api_keys(user_id)
+
+        # Group keys by service
+        services = {}
         for key in keys:
-            key_data.append(
-                {
-                    "ID": key.id,
-                    "Service": key.service,
-                    "Added": key.created_at.strftime("%Y-%m-%d"),
-                }
-            )
+            if key.service not in services:
+                services[key.service] = []
+            services[key.service].append(key)
 
-        key_df = pd.DataFrame(key_data)
-        st.dataframe(key_df, hide_index=True, use_container_width=True)
+        if services:
+            # Create tabs for service groups and a tab for all keys
+            tab_names = ["All Keys"] + list(services.keys())
+            tabs = st.tabs([get_service_display_name(name) for name in tab_names])
 
-        # Delete key option
-        key_to_delete = st.selectbox(
-            "Select API Key to Delete",
-            options=[f"{k.service} (ID: {k.id})" for k in keys],
-            index=None,
-        )
-
-        if key_to_delete and st.button("Delete Selected API Key"):
-            # Extract key ID from selection
-            key_id = int(key_to_delete.split("ID: ")[1].split(")")[0])
-
-            if delete_api_key(key_id):
-                st.success("API key deleted successfully")
-                time.sleep(1)
-                st.rerun()
-    else:
-        st.info("No API keys found.")
-
-    # Add new API key
-    with st.form("add_api_key_form"):
-        st.subheader("Add New API Key")
-
-        service = st.text_input("Service Name", placeholder="binance, openai, etc.")
-        api_key = st.text_input("API Key", type="password")
-        api_secret = st.text_input("API Secret (optional)", type="password")
-
-        submitted = st.form_submit_button("Add API Key")
-
-        if submitted:
-            if not service or not api_key:
-                st.error("Service name and API key are required")
-            else:
-                # Add API key
-                db = SessionLocal()
-                try:
-                    store_api_key(
-                        db,
-                        user_id,
-                        service,
-                        api_key,
-                        api_secret if api_secret else None,
+            # All Keys tab
+            with tabs[0]:
+                key_data = []
+                for key in keys:
+                    key_data.append(
+                        {
+                            "ID": key.id,
+                            "Service": get_service_display_name(key.service),
+                            "Source": "OAuth" if key.is_oauth else "Manual",
+                            "Default": "✅" if key.is_default else "",
+                            "Added": key.created_at.strftime("%Y-%m-%d"),
+                            "Name": key.display_name or f"API Key {key.id}",
+                        }
                     )
-                    st.success(f"API key for {service} added successfully")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error adding API key: {str(e)}")
-                finally:
-                    db.close()
+
+                key_df = pd.DataFrame(key_data)
+                st.dataframe(key_df, hide_index=True, use_container_width=True)
+
+                # Delete key option
+                key_to_delete = st.selectbox(
+                    "Select API Key to Delete",
+                    options=[
+                        f"{k.display_name or k.service} (ID: {k.id})" for k in keys
+                    ],
+                    index=None,
+                )
+
+                if key_to_delete and st.button("Delete Selected API Key"):
+                    # Extract key ID from selection
+                    key_id = int(key_to_delete.split("ID: ")[1].split(")")[0])
+
+                    if delete_api_key(key_id):
+                        st.success("API key deleted successfully")
+                        time.sleep(1)
+                        st.rerun()
+
+            # Service-specific tabs
+            for i, service in enumerate(services.keys()):
+                with tabs[i + 1]:
+                    service_keys = services[service]
+
+                    st.subheader(f"{get_service_display_name(service)} API Keys")
+
+                    # Create card for each key
+                    columns = st.columns(min(len(service_keys), 3))
+
+                    for j, key in enumerate(service_keys):
+                        col_idx = j % len(columns)
+                        with columns[col_idx]:
+                            with st.container(border=True):
+                                # Key name/title
+                                title = key.display_name or f"API Key {key.id}"
+                                st.markdown(f"### {title}")
+
+                                # Source
+                                if key.is_oauth:
+                                    st.info(
+                                        f"Connected via {key.oauth_provider.capitalize()} OAuth"
+                                    )
+                                else:
+                                    st.info("Manually added")
+
+                                # Default indicator
+                                if key.is_default:
+                                    st.success("Default Key ✅")
+                                elif len(service_keys) > 1:
+                                    if st.button(
+                                        "Set as Default", key=f"default_{key.id}"
+                                    ):
+                                        success = set_default_api_key(
+                                            db, user_id, service, key.id
+                                        )
+                                        if success:
+                                            st.success(
+                                                f"Set {title} as the default key for {get_service_display_name(service)}"
+                                            )
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            st.error("Failed to set default key")
+
+                                # Delete button
+                                if st.button("Delete Key", key=f"delete_{key.id}"):
+                                    if delete_api_key(key.id):
+                                        st.success(f"Deleted {title}")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to delete key")
+
+                    st.markdown("---")
+
+                    # Add new key specific to this service
+                    with st.form(f"add_{service}_key_form"):
+                        st.subheader(
+                            f"Add New {get_service_display_name(service)} API Key"
+                        )
+
+                        api_key = st.text_input("API Key", type="password")
+                        api_secret = st.text_input(
+                            "API Secret (optional)", type="password"
+                        )
+                        display_name = st.text_input(
+                            "Display Name (optional)",
+                            placeholder=f"My {get_service_display_name(service)} Key",
+                        )
+
+                        submitted = st.form_submit_button(
+                            f"Add {get_service_display_name(service)} API Key"
+                        )
+
+                        if submitted:
+                            if not api_key:
+                                st.error("API key is required")
+                            else:
+                                try:
+                                    new_key = store_api_key(
+                                        db,
+                                        user_id,
+                                        service,
+                                        api_key,
+                                        api_secret if api_secret else None,
+                                    )
+
+                                    # Update display name if provided
+                                    if display_name and new_key:
+                                        new_key.display_name = display_name
+                                        db.commit()
+
+                                    st.success(
+                                        f"API key for {get_service_display_name(service)} added successfully"
+                                    )
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error adding API key: {str(e)}")
+        else:
+            st.info("No API keys found.")
+
+        # Add new API key
+        with st.form("add_api_key_form"):
+            st.subheader("Add New API Key")
+
+            service = st.text_input("Service Name", placeholder="binance, openai, etc.")
+            api_key = st.text_input("API Key", type="password")
+            api_secret = st.text_input("API Secret (optional)", type="password")
+            display_name = st.text_input("Display Name (optional)")
+
+            submitted = st.form_submit_button("Add API Key")
+
+            if submitted:
+                if not service or not api_key:
+                    st.error("Service name and API key are required")
+                else:
+                    try:
+                        new_key = store_api_key(
+                            db,
+                            user_id,
+                            service,
+                            api_key,
+                            api_secret if api_secret else None,
+                        )
+
+                        # Update display name if provided
+                        if display_name and new_key:
+                            new_key.display_name = display_name
+                            db.commit()
+
+                        st.success(f"API key for {service} added successfully")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error adding API key: {str(e)}")
+    finally:
+        db.close()
+
+    # OAuth API key section
+    st.markdown("---")
+    st.subheader("Connect via OAuth")
+    st.info("You can also connect API services by authenticating with OAuth providers.")
+
+    # Import OAuth config here to avoid circular imports
+    from src.utils.oauth_config import OAUTH_CONFIGS
+
+    # Get the providers that support API keys
+    api_providers = [
+        p
+        for p, config in OAUTH_CONFIGS.items()
+        if config.get("supports_api_keys")
+        and config.get("client_id")
+        and config.get("client_secret")
+    ]
+
+    if not api_providers:
+        st.warning(
+            "No OAuth providers with API support are configured. Please set up OAuth credentials in your environment variables."
+        )
+    else:
+        # Create a grid of provider cards for API connections
+        providers_per_row = 3
+        rows = (len(api_providers) + providers_per_row - 1) // providers_per_row
+
+        for row in range(rows):
+            cols = st.columns(providers_per_row)
+
+            for i in range(providers_per_row):
+                idx = row * providers_per_row + i
+                if idx < len(api_providers):
+                    provider = api_providers[idx]
+                    config = OAUTH_CONFIGS[provider]
+
+                    with cols[i]:
+                        with st.container(border=True):
+                            st.markdown(f"### {config['display_name']}")
+
+                            # Show supported services
+                            if "api_services" in config:
+                                services_str = ", ".join(
+                                    [
+                                        get_service_display_name(s)
+                                        for s in config["api_services"]
+                                    ]
+                                )
+                                st.markdown(f"**Supports:** {services_str}")
+
+                            # Add connect button
+                            if st.button(
+                                f"Connect {config['display_name']} API",
+                                key=f"connect_api_{provider}",
+                            ):
+                                # Generate OAuth URL with expanded scope
+                                from src.utils.oauth_config import (
+                                    generate_oauth_authorize_url,
+                                )
+
+                                auth_url, state = generate_oauth_authorize_url(provider)
+                                if auth_url:
+                                    # Store state in session
+                                    st.session_state.oauth_state = state
+                                    st.session_state.oauth_flow = provider
+                                    st.session_state.oauth_for_api = True
+
+                                    # Redirect to OAuth provider
+                                    st.markdown(
+                                        f'<meta http-equiv="refresh" content="0;url={auth_url}">',
+                                        unsafe_allow_html=True,
+                                    )
+                                else:
+                                    st.error(
+                                        f"Failed to generate {config['display_name']} OAuth URL. Please check your configuration."
+                                    )
 
 
 def show_preferences(user_id):
@@ -363,7 +584,7 @@ def show_preferences(user_id):
     st.subheader("App Preferences")
 
     # Theme preference
-    theme = st.radio("Theme", options=["Light", "Dark", "System"], horizontal=True)
+    st.radio("Theme", options=["Light", "Dark", "System"], horizontal=True)
 
     # AI model preferences
     st.subheader("AI Model Preferences")
@@ -555,7 +776,7 @@ def show_preferences(user_id):
                     if user_obj and user_obj.data_source_preferences:
                         try:
                             preferences = json.loads(user_obj.data_source_preferences)
-                        except:
+                        except Exception:
                             preferences = {}
 
                     # Update preferences
@@ -621,9 +842,9 @@ def show_data_export(user_id):
     # Date range
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("Start Date")
+        st.date_input("Start Date")
     with col2:
-        end_date = st.date_input("End Date")
+        st.date_input("End Date")
 
     # Format options
     format = st.radio(
@@ -659,62 +880,175 @@ def show_data_export(user_id):
                 st.info("Excel export would be available in the full app")
 
 
-def test_all_connections():
-    """Test all API connections and return results"""
+def test_all_connections(user_id=None):
+    """Test all API connections and return results
+
+    Args:
+        user_id: User ID to test connections for (optional)
+
+    Returns:
+        List of connection test results
+    """
     results = []
 
+    # Get all available API keys for the user if user_id is provided
+    user_api_keys = {}
+    if user_id:
+        db = SessionLocal()
+        try:
+            # Get all keys by service
+            keys = db.query(ApiKey).filter(ApiKey.user_id == user_id).all()
+            for key in keys:
+                if key.service not in user_api_keys:
+                    user_api_keys[key.service] = []
+                user_api_keys[key.service].append(
+                    {
+                        "id": key.id,
+                        "is_default": key.is_default,
+                        "is_oauth": key.is_oauth,
+                        "oauth_provider": key.oauth_provider,
+                        "display_name": key.display_name or f"API Key {key.id}",
+                    }
+                )
+        finally:
+            db.close()
+
+    # Test connections for all API configs
     for api in APIConfigManager.get_api_configs():
-        # Check if we have the necessary credentials
-        key, secret = APIConfigManager.get_api_credentials(api["service_id"])
-        has_credentials = True
+        service_id = api["service_id"]
 
-        if api.get("needs_key", True) and not key:
-            has_credentials = False
+        # Check if user has keys for this service
+        user_keys = user_api_keys.get(service_id, [])
+        has_user_keys = len(user_keys) > 0
 
-        if api.get("needs_secret", False) and not secret:
-            has_credentials = False
+        # Check if we have environment credentials
+        env_key, env_secret = "", ""
+        if api.get("env_var_key"):
+            env_key = APIConfigManager.get_api_value_from_env(
+                api.get("env_var_key", "")
+            )
+        if api.get("env_var_secret"):
+            env_secret = APIConfigManager.get_api_value_from_env(
+                api.get("env_var_secret", "")
+            )
 
-        # Only test if we have credentials or no credentials are needed
-        if has_credentials or not api.get("needs_key", True):
+        has_env_credentials = True
+        if api.get("needs_key", True) and not env_key:
+            has_env_credentials = False
+        if api.get("needs_secret", False) and not env_secret:
+            has_env_credentials = False
+
+        # Determine if we have any credentials
+        has_credentials = (
+            has_user_keys or has_env_credentials or not api.get("needs_key", True)
+        )
+
+        # Test with user's default key first if available
+        if user_id and has_user_keys:
+            # Find default key or first key
+            default_key = next((k for k in user_keys if k["is_default"]), user_keys[0])
+
             try:
                 success, message = APIConfigManager.test_api_connection(
-                    api["service_id"]
+                    service_id, user_id=user_id, key_id=default_key["id"]
                 )
             except Exception as e:
                 success = False
                 message = f"Error during test: {str(e)}"
-        else:
-            success = False
-            message = "Missing credentials"
 
-        results.append(
-            {
-                "name": api["name"],
-                "service_id": api["service_id"],
-                "category": api.get("category", "Other"),
-                "has_credentials": has_credentials,
-                "success": success,
-                "message": message,
-                "api_config": api,
-            }
-        )
+            # Add the result
+            results.append(
+                {
+                    "name": api["name"],
+                    "service_id": service_id,
+                    "category": api.get("category", "Other"),
+                    "has_credentials": True,
+                    "success": success,
+                    "message": message,
+                    "api_config": api,
+                    "key_id": default_key["id"],
+                    "key_name": default_key["display_name"],
+                    "is_oauth": default_key.get("is_oauth", False),
+                    "oauth_provider": default_key.get("oauth_provider"),
+                }
+            )
+
+            # Test additional keys if any and save failures
+            if len(user_keys) > 1:
+                for key in user_keys:
+                    if key["id"] != default_key["id"]:
+                        try:
+                            (
+                                key_success,
+                                key_message,
+                            ) = APIConfigManager.test_api_connection(
+                                service_id, user_id=user_id, key_id=key["id"]
+                            )
+                            # Only add failed alternative keys to results
+                            if not key_success:
+                                results.append(
+                                    {
+                                        "name": f"{api['name']} (Alt)",
+                                        "service_id": service_id,
+                                        "category": api.get("category", "Other"),
+                                        "has_credentials": True,
+                                        "success": key_success,
+                                        "message": key_message,
+                                        "api_config": api,
+                                        "key_id": key["id"],
+                                        "key_name": key["display_name"],
+                                        "is_oauth": key.get("is_oauth", False),
+                                        "oauth_provider": key.get("oauth_provider"),
+                                        "is_alternative": True,
+                                    }
+                                )
+                        except Exception:
+                            # Ignore errors for alternative keys
+                            pass
+        else:
+            # Test with environment credentials
+            if has_credentials:
+                try:
+                    success, message = APIConfigManager.test_api_connection(service_id)
+                except Exception as e:
+                    success = False
+                    message = f"Error during test: {str(e)}"
+            else:
+                success = False
+                message = "Missing credentials"
+
+            results.append(
+                {
+                    "name": api["name"],
+                    "service_id": service_id,
+                    "category": api.get("category", "Other"),
+                    "has_credentials": has_credentials,
+                    "success": success,
+                    "message": message,
+                    "api_config": api,
+                }
+            )
 
     return results
 
 
-def show_connection_status():
-    """Show API connection status dashboard"""
+def show_connection_status(user_id=None):
+    """Show API connection status dashboard
+
+    Args:
+        user_id: User ID to show connections for (optional)
+    """
     st.subheader("API Connection Status")
 
     # Add a refresh button
     if st.button("Refresh All Connections"):
         with st.spinner("Testing all API connections..."):
-            st.session_state.connection_results = test_all_connections()
+            st.session_state.connection_results = test_all_connections(user_id)
 
     # Initialize results if not in session state
     if "connection_results" not in st.session_state:
         with st.spinner("Testing all API connections..."):
-            st.session_state.connection_results = test_all_connections()
+            st.session_state.connection_results = test_all_connections(user_id)
 
     # Get results
     results = st.session_state.connection_results
@@ -731,7 +1065,7 @@ def show_connection_status():
     )
     working_apis = sum(1 for r in results if r["success"])
 
-    st.markdown(f"### Connection Summary")
+    st.markdown("### Connection Summary")
 
     cols = st.columns(3)
     with cols[0]:
@@ -774,7 +1108,18 @@ def show_connection_status():
 
                 # Create card
                 with st.container(border=True):
-                    st.markdown(f"#### {status_emoji} {result['name']}")
+                    # Display key name if available
+                    if "key_name" in result:
+                        st.markdown(f"#### {status_emoji} {result['name']}")
+                        st.markdown(f"**Key:** {result['key_name']}")
+                    else:
+                        st.markdown(f"#### {status_emoji} {result['name']}")
+
+                    # Display OAuth info if available
+                    if result.get("is_oauth") and result.get("oauth_provider"):
+                        st.info(
+                            f"Connected via {result['oauth_provider'].capitalize()} OAuth"
+                        )
 
                     # Status message
                     if result["success"]:
@@ -804,18 +1149,34 @@ def show_connection_status():
                     st.markdown(f"**Message:** {short_message}")
 
                     # Add quick test button
-                    if st.button("Test", key=f"quick_test_{result['service_id']}"):
+                    test_key = f"quick_test_{result['service_id']}"
+                    if "key_id" in result:
+                        test_key += f"_{result['key_id']}"
+
+                    if st.button("Test", key=test_key):
                         with st.spinner(f"Testing connection to {result['name']}..."):
-                            success, message = APIConfigManager.test_api_connection(
-                                result["service_id"]
-                            )
+                            if "key_id" in result and user_id:
+                                success, message = APIConfigManager.test_api_connection(
+                                    result["service_id"],
+                                    user_id=user_id,
+                                    key_id=result["key_id"],
+                                )
+                            else:
+                                success, message = APIConfigManager.test_api_connection(
+                                    result["service_id"]
+                                )
+
                             if success:
                                 st.success(message)
                             else:
                                 st.error(message)
 
                     # Add configure link that jumps to the Configuration tab and specific API section
-                    if st.button("Configure", key=f"config_{result['service_id']}"):
+                    config_key = f"config_{result['service_id']}"
+                    if "key_id" in result:
+                        config_key += f"_{result['key_id']}"
+
+                    if st.button("Configure", key=config_key):
                         # Set session state to remember which API to expand
                         st.session_state.selected_api_to_configure = result[
                             "service_id"
@@ -1028,21 +1389,21 @@ def show_api_connections(user_id):
     )
 
     with status_tab:
-        show_connection_status()
+        show_connection_status(user_id)
 
     with config_tab:
         # Get API categories
         categories = APIConfigManager.get_api_categories()
 
         # If we have a selected service ID, find which category tab it belongs to
-        selected_category_index = 0
         if "selected_api_to_configure" in st.session_state:
             selected_service = st.session_state.selected_api_to_configure
             for i, category in enumerate(categories):
                 apis = APIConfigManager.get_api_configs_by_category(category)
+                # Note: We intentionally don't use the index yet, will be used for auto-selection in future versions
                 if any(api["service_id"] == selected_service for api in apis):
-                    selected_category_index = i
-                    break
+                    # Future enhancement: auto-select this tab
+                    pass
 
         # Create category tabs
         tabs = st.tabs(categories)
@@ -1098,7 +1459,7 @@ def show_api_connections(user_id):
                             # We have enough info to test the connection
                             st.markdown("**Current Status**")
                             if st.button(
-                                f"Test Connection", key=f"test_{api['service_id']}"
+                                "Test Connection", key=f"test_{api['service_id']}"
                             ):
                                 with st.spinner(
                                     f"Testing connection to {api['name']}..."

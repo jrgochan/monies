@@ -1,4 +1,5 @@
 import os
+
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
@@ -103,22 +104,170 @@ def store_api_key(db, user_id, service, api_key, api_secret=None):
         return api_key_obj
 
 
-def get_api_key(db, user_id, service):
-    """Retrieve and decrypt API key and secret for a user."""
+def get_api_key(db, user_id, service, key_id=None):
+    """Retrieve and decrypt API key and secret for a user.
+
+    Args:
+        db: Database session
+        user_id: User ID
+        service: Service name
+        key_id: Specific API key ID to retrieve (optional)
+
+    Returns:
+        Tuple of (decrypted_key, decrypted_secret, api_key_obj)
+    """
     from src.models.database import ApiKey
 
-    api_key = (
-        db.query(ApiKey)
-        .filter(ApiKey.user_id == user_id, ApiKey.service == service)
-        .first()
+    query = db.query(ApiKey).filter(
+        ApiKey.user_id == user_id, ApiKey.service == service
     )
 
+    if key_id:
+        # Get specific key by ID
+        api_key = query.filter(ApiKey.id == key_id).first()
+    else:
+        # Get default key or first available
+        default_key = query.filter(ApiKey.is_default.is_(True)).first()
+        if default_key:
+            api_key = default_key
+        else:
+            api_key = query.first()
+
     if not api_key:
-        return None, None
+        return None, None, None
 
     decrypted_key = decrypt_data(api_key.encrypted_key)
     decrypted_secret = (
         decrypt_data(api_key.encrypted_secret) if api_key.encrypted_secret else None
     )
 
-    return decrypted_key, decrypted_secret
+    return decrypted_key, decrypted_secret, api_key
+
+
+def get_api_keys_for_service(db, user_id, service):
+    """Get all API keys for a specific service.
+
+    Args:
+        db: Database session
+        user_id: User ID
+        service: Service name
+
+    Returns:
+        List of ApiKey objects
+    """
+    from src.models.database import ApiKey
+
+    keys = (
+        db.query(ApiKey)
+        .filter(ApiKey.user_id == user_id, ApiKey.service == service)
+        .all()
+    )
+
+    return keys
+
+
+def set_default_api_key(db, user_id, service, key_id):
+    """Set a specific API key as the default for a service.
+
+    Args:
+        db: Database session
+        user_id: User ID
+        service: Service name
+        key_id: API key ID to set as default
+
+    Returns:
+        Boolean indicating success
+    """
+    from src.models.database import ApiKey
+
+    try:
+        # Clear default status from all keys for this service
+        db.query(ApiKey).filter(
+            ApiKey.user_id == user_id, ApiKey.service == service
+        ).update({"is_default": False})
+
+        # Set the specified key as default
+        key = (
+            db.query(ApiKey)
+            .filter(ApiKey.id == key_id, ApiKey.user_id == user_id)  # Security check
+            .first()
+        )
+
+        if not key:
+            return False
+
+        key.is_default = True
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        print(f"Error setting default API key: {str(e)}")
+        return False
+
+
+def store_oauth_api_key(
+    db,
+    user_id,
+    service,
+    api_key,
+    api_secret=None,
+    oauth_provider=None,
+    display_name=None,
+):
+    """Store an API key obtained via OAuth.
+
+    Args:
+        db: Database session
+        user_id: User ID
+        service: Service name (e.g., 'coinbase', 'twitter')
+        api_key: API key or access token
+        api_secret: API secret or refresh token (optional)
+        oauth_provider: Name of the OAuth provider (e.g., 'google', 'coinbase')
+        display_name: Display name for this key
+
+    Returns:
+        ApiKey object
+    """
+    from src.models.database import ApiKey
+
+    # Check if this OAuth key already exists
+    existing_key = (
+        db.query(ApiKey)
+        .filter(
+            ApiKey.user_id == user_id,
+            ApiKey.service == service,
+            ApiKey.is_oauth.is_(True),
+            ApiKey.oauth_provider == oauth_provider,
+        )
+        .first()
+    )
+
+    if existing_key:
+        # Update existing key
+        existing_key.encrypted_key = encrypt_data(api_key)
+        if api_secret is not None:
+            existing_key.encrypted_secret = encrypt_data(api_secret)
+        if display_name:
+            existing_key.display_name = display_name
+        db.commit()
+        return existing_key
+    else:
+        # Create new key entry
+        # If this is the first key for this service, make it the default
+        existing_keys = get_api_keys_for_service(db, user_id, service)
+        is_default = len(existing_keys) == 0
+
+        api_key_obj = ApiKey(
+            user_id=user_id,
+            service=service,
+            encrypted_key=encrypt_data(api_key),
+            encrypted_secret=encrypt_data(api_secret) if api_secret else None,
+            is_oauth=True,
+            oauth_provider=oauth_provider,
+            is_default=is_default,
+            display_name=display_name or f"{oauth_provider.capitalize()} {service}",
+        )
+        db.add(api_key_obj)
+        db.commit()
+        db.refresh(api_key_obj)
+        return api_key_obj

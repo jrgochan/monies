@@ -1,8 +1,7 @@
-import json
 import os
 import secrets
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import bcrypt
 import jwt

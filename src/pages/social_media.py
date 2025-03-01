@@ -7,14 +7,11 @@ This module handles:
 - Analyzing social media sentiment
 """
 
-import base64
 import os
 import tempfile
 import time
 from datetime import datetime, timedelta
-from io import BytesIO
 
-import pandas as pd
 import plotly.express as px
 import streamlit as st
 
@@ -22,13 +19,12 @@ from src.api.ai_analysis import generate_social_post
 from src.api.social_media import (
     cancel_scheduled_post,
     get_scheduled_posts,
-    get_twitter_sentiment,
     post_to_facebook,
     post_to_linkedin,
     post_to_twitter,
     schedule_post,
 )
-from src.models.database import ScheduledPost, SessionLocal, SocialAccount
+from src.models.database import SessionLocal, SocialAccount
 from src.utils.auth import require_login
 from src.utils.security import get_api_key, store_api_key
 
@@ -302,10 +298,10 @@ def show_post_section(user_id):
             )
 
             # Scheduling options
-            schedule_post = st.checkbox("Schedule for later")
+            should_schedule = st.checkbox("Schedule for later")
 
             scheduled_time = None
-            if schedule_post:
+            if should_schedule:
                 min_date = datetime.now() + timedelta(minutes=5)
                 scheduled_date = st.date_input("Date", min_value=min_date.date())
                 scheduled_time_input = st.time_input("Time", value=min_date.time())
@@ -587,7 +583,7 @@ def show_scheduled_posts(user_id):
                         st.markdown("📸 **Instagram**")
 
                     scheduled_time = datetime.fromisoformat(post["scheduled_time"])
-                    st.caption(f"Scheduled for:")
+                    st.caption("Scheduled for:")
                     st.caption(scheduled_time.strftime("%Y-%m-%d"))
                     st.caption(scheduled_time.strftime("%H:%M"))
 

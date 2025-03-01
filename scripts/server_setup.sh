@@ -10,6 +10,10 @@ echo "Setting up Monies application on server..."
 echo "Creating application directory..."
 sudo mkdir -p /var/www/html/monies
 
+# Set executable permissions
+chmod +x scripts/*.sh
+chmod +x scripts/*.py
+
 # Install dependencies if not already installed
 echo "Checking/installing system dependencies..."
 if ! command -v nginx &> /dev/null; then
@@ -28,6 +32,15 @@ if ! command -v streamlit &> /dev/null; then
     echo "Installing Streamlit..."
     sudo pip3 install streamlit
 fi
+
+# Check if database exists and initialize it if not
+echo "Initializing database..."
+python3 init_db.py
+
+# Run database migrations
+echo "Running database migrations..."
+python3 scripts/migrate_api_keys.py
+python3 scripts/migrate_oauth_scopes.py
 
 # Setup Nginx configuration
 echo "Setting up Nginx configuration..."

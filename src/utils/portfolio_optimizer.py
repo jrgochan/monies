@@ -3,9 +3,8 @@ import logging
 
 # Get API keys from environment
 import os
-import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -356,7 +355,7 @@ class PortfolioOptimizer:
                         # Now try to use cached data if available and we prefer live data
                         if use_cache and prefer_live_data and cached_data is None:
                             logger.info(
-                                f"Attempting to use cached data after all API data source attempts failed"
+                                "Attempting to use cached data after all API data source attempts failed"
                             )
                             cached_data = MarketDataCache.get_cached_price_history(
                                 db=db, symbol=symbol, time_period=lookback_period
@@ -575,12 +574,12 @@ class PortfolioOptimizer:
                                 # Handle case where index is string dates or integers
                                 try:
                                     # Convert string dates to datetime if needed
-                                    from datetime import datetime
+                                    # datetime already imported at line 6
 
                                     start_date = pd.to_datetime(series.index[0])
                                     end_date = pd.to_datetime(series.index[-1])
                                     days = (end_date - start_date).days
-                                except:
+                                except Exception:
                                     # If conversion fails, estimate based on length of series
                                     # Assume daily data
                                     days = len(series)
@@ -701,12 +700,12 @@ class PortfolioOptimizer:
                         # Handle case where index is string dates or integers
                         try:
                             # Convert string dates to datetime if needed
-                            from datetime import datetime
+                            # datetime already imported at the top
 
                             start_date = pd.to_datetime(portfolio_performance.index[0])
                             end_date = pd.to_datetime(portfolio_performance.index[-1])
                             days = (end_date - start_date).days
-                        except:
+                        except Exception:
                             # If conversion fails, estimate based on length of series
                             # Assume daily data
                             days = len(portfolio_performance)

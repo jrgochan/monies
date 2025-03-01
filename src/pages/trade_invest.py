@@ -1,13 +1,14 @@
-import streamlit as st
-import pandas as pd
-import plotly.express as px
-import yfinance as yf
 from datetime import datetime
 
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+import yfinance as yf
+
+# No exchange imports needed
+from src.models.database import Balance, SessionLocal, Transaction, Wallet
 from src.utils.auth import require_login
-from src.models.database import SessionLocal, Wallet, Balance, Transaction
 from src.utils.security import get_api_key
-from src.api.exchanges import place_order, get_current_prices
 
 
 def get_user_wallets(user_id):
@@ -322,14 +323,14 @@ def show_etf_investing():
                 hist = etf.history(period="1y")
                 if hist.empty:
                     raise ValueError("No historical data available")
-            except Exception as e:
+            except Exception:
                 # If the first attempt fails, try with ^-prefix (sometimes helps with indices)
                 st.warning(f"Retrying with alternative ticker format: ^{etf_ticker}")
                 try:
                     etf = yf.Ticker(f"^{etf_ticker}")
                     info = etf.info
                     hist = etf.history(period="1y")
-                except Exception as inner_e:
+                except Exception:
                     # Both attempts failed, use mock data
                     st.error(
                         f"Could not retrieve data for {etf_ticker}. Using sample data instead."
@@ -583,7 +584,7 @@ def show_rebalance():
 def show_trade_invest():
     """Display the Trade/Invest page"""
     # Require login
-    user = require_login()
+    require_login()
 
     # Add page title
     st.title("Trade & Invest")

@@ -1,16 +1,14 @@
 import time
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
 from src.api.exchanges import (
-    get_exchange_client,
     get_supported_exchanges,
     get_transaction_history,
     get_wallet_balance,
 )
-from src.models.database import ApiKey, Balance, SessionLocal, Transaction, Wallet
+from src.models.database import Balance, SessionLocal, Transaction, Wallet
 from src.utils.auth import require_login
 from src.utils.security import get_api_key, store_api_key
 
@@ -369,37 +367,77 @@ def show_wallet_card(wallet, user_id, prices=None):
                     with st.spinner("Refreshing balances..."):
                         try:
                             db = SessionLocal()
-                            api_key, api_secret = get_api_key(
-                                db, user_id, wallet.exchange
-                            )
+
+                            # Check if there's an OAuth token for this exchange
+                            from src.utils.oauth_config import get_oauth_access_token
+
+                            oauth_token = None
+
+                            # Only Coinbase supports OAuth for now
+                            if wallet.exchange.lower() == "coinbase":
+                                # Get the user object to check for OAuth status
+                                from src.models.database import User
+
+                                user = db.query(User).filter(User.id == user_id).first()
+
+                                # If user has OAuth with Coinbase, get the token
+                                if user and user.oauth_provider == "coinbase":
+                                    oauth_token = get_oauth_access_token(user)
+                                    if oauth_token:
+                                        st.success(
+                                            "Using Coinbase OAuth authentication"
+                                        )
+
+                            # If no OAuth token, fallback to API keys
+                            if not oauth_token:
+                                api_key, api_secret, _ = get_api_key(
+                                    db, user_id, wallet.exchange
+                                )
+                            else:
+                                api_key, api_secret = None, None
+
                             db.close()
 
-                            if api_key and api_secret:
-                                # Use binanceus for all Binance connections
-                                exchange_name = (
-                                    "binanceus"
-                                    if wallet.exchange.lower() == "binance"
-                                    else wallet.exchange
+                            # Use binanceus for all Binance connections
+                            exchange_name = (
+                                "binanceus"
+                                if wallet.exchange.lower() == "binance"
+                                else wallet.exchange
+                            )
+
+                            # If it's a Binance account, show info message
+                            if wallet.exchange.lower() == "binance":
+                                st.info("Using Binance.US API for compatibility")
+
+                            # Fetch balances using either OAuth token or API keys
+                            if oauth_token and wallet.exchange.lower() == "coinbase":
+                                # Use OAuth for Coinbase
+                                balances = get_wallet_balance(
+                                    exchange_name, oauth_token=oauth_token
                                 )
-
-                                # If it's a Binance account, show info message
-                                if wallet.exchange.lower() == "binance":
-                                    st.info("Using Binance.US API for compatibility")
-
+                            elif api_key and api_secret:
+                                # Use API keys for other exchanges
                                 balances = get_wallet_balance(
                                     exchange_name, api_key, api_secret
                                 )
-                                if balances:
-                                    if update_wallet_balances(wallet.id, balances):
-                                        st.success("Balances updated")
-                                        time.sleep(1)
-                                        st.rerun()
-                                else:
-                                    st.error(
-                                        "Failed to fetch balances. Make sure your API keys are from Binance.US, not regular Binance."
-                                    )
                             else:
-                                st.error("API keys not found")
+                                st.error("No API credentials found")
+                                balances = None
+
+                            if balances and "error" not in balances:
+                                if update_wallet_balances(wallet.id, balances):
+                                    st.success("Balances updated")
+                                    time.sleep(1)
+                                    st.rerun()
+                            else:
+                                error_msg = (
+                                    balances.get("error", "Failed to fetch balances")
+                                    if balances
+                                    else "Failed to fetch balances"
+                                )
+                                if wallet.exchange.lower() == "binance":
+                                    error_msg += ". Make sure your API keys are from Binance.US, not regular Binance."
+                                st.error(error_msg)
                         except Exception as e:
                             st.error(f"Error refreshing balances: {str(e)}")
 
@@ -419,51 +457,97 @@ def show_wallet_card(wallet, user_id, prices=None):
                 if wallet.wallet_type == "exchange":
                     try:
                         db = SessionLocal()
-                        api_key, api_secret = get_api_key(db, user_id, wallet.exchange)
+
+                        # Check if there's an OAuth token for this exchange
+                        from src.utils.oauth_config import get_oauth_access_token
+
+                        oauth_token = None
+
+                        # Only Coinbase supports OAuth for now
+                        if wallet.exchange.lower() == "coinbase":
+                            # Get the user object to check for OAuth status
+                            from src.models.database import User
+
+                            user = db.query(User).filter(User.id == user_id).first()
+
+                            # If user has OAuth with Coinbase, get the token
+                            if user and user.oauth_provider == "coinbase":
+                                oauth_token = get_oauth_access_token(user)
+                                if oauth_token:
+                                    st.success("Using Coinbase OAuth authentication")
+
+                        # If no OAuth token, fallback to API keys
+                        if not oauth_token:
+                            api_key, api_secret, _ = get_api_key(
+                                db, user_id, wallet.exchange
+                            )
+                        else:
+                            api_key, api_secret = None, None
+
                         db.close()
 
-                        if api_key and api_secret:
-                            # Use binanceus for all Binance connections
-                            exchange_name = (
-                                "binanceus"
-                                if wallet.exchange.lower() == "binance"
-                                else wallet.exchange
-                            )
+                        # Use binanceus for all Binance connections
+                        exchange_name = (
+                            "binanceus"
+                            if wallet.exchange.lower() == "binance"
+                            else wallet.exchange
+                        )
 
-                            # If it's a Binance account, show info message
-                            if wallet.exchange.lower() == "binance":
-                                st.info("Using Binance.US API for compatibility")
+                        # If it's a Binance account, show info message
+                        if wallet.exchange.lower() == "binance":
+                            st.info("Using Binance.US API for compatibility")
 
-                            with st.spinner("Fetching transactions..."):
+                        with st.spinner("Fetching transactions..."):
+                            # Get transactions using either OAuth or API keys
+                            if oauth_token and wallet.exchange.lower() == "coinbase":
                                 txs = get_transaction_history(
-                                    exchange_name, api_key, api_secret
+                                    exchange_name, oauth_token=oauth_token
                                 )
-                                if txs:
-                                    # Create a dataframe for display
-                                    df = pd.DataFrame(txs)
-                                    df["date"] = pd.to_datetime(
-                                        df["timestamp"], unit="ms"
-                                    )
+                            elif api_key and api_secret:
+                                txs = get_transaction_history(
+                                    exchange_name,
+                                    api_key=api_key,
+                                    api_secret=api_secret,
+                                )
+                            else:
+                                st.error("No API credentials found")
+                                txs = []
 
-                                    # Display transactions
-                                    st.dataframe(
-                                        df[
-                                            [
-                                                "date",
-                                                "symbol",
-                                                "side",
-                                                "amount",
-                                                "price",
-                                                "cost",
-                                            ]
-                                        ],
-                                        hide_index=True,
-                                        use_container_width=True,
-                                    )
+                            if txs:
+                                # Create a dataframe for display
+                                df = pd.DataFrame(txs)
+
+                                # Handle different timestamp formats
+                                # Coinbase uses ISO format strings, Binance uses millisecond timestamps
+                                if "timestamp" in df.columns:
+                                    if isinstance(df["timestamp"].iloc[0], str):
+                                        # ISO format string (Coinbase)
+                                        df["date"] = pd.to_datetime(df["timestamp"])
+                                    else:
+                                        # Millisecond timestamp (Binance)
+                                        df["date"] = pd.to_datetime(
+                                            df["timestamp"], unit="ms"
+                                        )
                                 else:
-                                    st.info("No transactions found")
-                        else:
-                            st.error("API keys not found")
+                                    df["date"] = pd.to_datetime("now")  # Fallback
+
+                                # Display transactions
+                                st.dataframe(
+                                    df[
+                                        [
+                                            "date",
+                                            "symbol",
+                                            "side",
+                                            "amount",
+                                            "price",
+                                            "cost",
+                                        ]
+                                    ],
+                                    hide_index=True,
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.info("No transactions found")
                     except Exception as e:
                         st.error(f"Error fetching transactions: {str(e)}")
 

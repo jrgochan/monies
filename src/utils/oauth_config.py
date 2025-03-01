@@ -1,7 +1,6 @@
 """
-OAuth Configuration for Google and Coinbase authentication
+OAuth Configuration for authentication and API platform integration
 """
-import json
 import os
 import secrets
 from datetime import datetime, timedelta
@@ -10,7 +9,6 @@ from urllib.parse import urlencode
 
 import requests
 from authlib.integrations.requests_client import OAuth2Session
-from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
 from src.models.database import SessionLocal, User
@@ -71,6 +69,7 @@ OAUTH_CONFIGS = {
         "icon": "google",
         "color": "#DB4437",
         "display_name": "Google",
+        "supports_api_keys": False,
     },
     "coinbase": {
         "client_id": COINBASE_CLIENT_ID,
@@ -78,11 +77,13 @@ OAUTH_CONFIGS = {
         "authorize_url": "https://www.coinbase.com/oauth/authorize",
         "token_url": "https://api.coinbase.com/oauth/token",
         "userinfo_url": "https://api.coinbase.com/v2/user",
-        "scope": "wallet:user:read,wallet:accounts:read",
+        "scope": "wallet:user:read,wallet:accounts:read,wallet:transactions:read",
         "redirect_uri": COINBASE_REDIRECT_URI,
         "icon": "bitcoin",
         "color": "#0052FF",
         "display_name": "Coinbase",
+        "supports_api_keys": True,
+        "api_services": ["coinbase"],
     },
     "facebook": {
         "client_id": FACEBOOK_CLIENT_ID,
@@ -95,6 +96,8 @@ OAUTH_CONFIGS = {
         "icon": "facebook",
         "color": "#1877F2",
         "display_name": "Facebook",
+        "supports_api_keys": True,
+        "api_services": ["facebook"],
     },
     "twitter": {
         "client_id": TWITTER_CLIENT_ID,
@@ -102,11 +105,13 @@ OAUTH_CONFIGS = {
         "authorize_url": "https://twitter.com/i/oauth2/authorize",
         "token_url": "https://api.twitter.com/2/oauth2/token",
         "userinfo_url": "https://api.twitter.com/2/users/me",
-        "scope": "tweet.read users.read",
+        "scope": "tweet.read users.read offline.access",
         "redirect_uri": TWITTER_REDIRECT_URI,
         "icon": "twitter",
         "color": "#1DA1F2",
         "display_name": "Twitter",
+        "supports_api_keys": True,
+        "api_services": ["twitter"],
     },
     "github": {
         "client_id": GITHUB_CLIENT_ID,
@@ -119,6 +124,8 @@ OAUTH_CONFIGS = {
         "icon": "github",
         "color": "#24292E",
         "display_name": "GitHub",
+        "supports_api_keys": True,
+        "api_services": ["github"],
     },
     "microsoft": {
         "client_id": MICROSOFT_CLIENT_ID,
@@ -126,11 +133,12 @@ OAUTH_CONFIGS = {
         "authorize_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
         "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
         "userinfo_url": "https://graph.microsoft.com/v1.0/me",
-        "scope": "openid email profile User.Read",
+        "scope": "openid email profile User.Read offline_access",
         "redirect_uri": MICROSOFT_REDIRECT_URI,
         "icon": "microsoft",
         "color": "#00A4EF",
         "display_name": "Microsoft",
+        "supports_api_keys": False,
     },
 }
 
@@ -329,6 +337,9 @@ def create_or_update_oauth_user(
         if not user and user_info.get("email"):
             user = db.query(User).filter(User.email == user_info["email"]).first()
 
+        # Flag to track if this is a new OAuth connection
+        is_new_oauth_connection = False
+
         # Create new user if not found
         if not user:
             # Generate username if not provided
@@ -367,8 +378,13 @@ def create_or_update_oauth_user(
             db.add(user)
             db.commit()
             db.refresh(user)
+            is_new_oauth_connection = True
         else:
             # Update existing user with new token
+            # Check if this is a new OAuth connection for this user
+            if user.oauth_provider != provider or user.oauth_id != user_info["id"]:
+                is_new_oauth_connection = True
+
             user.oauth_provider = provider
             user.oauth_id = user_info["id"]
             user.oauth_access_token = encrypt_data(token_data.get("access_token", ""))
@@ -389,6 +405,12 @@ def create_or_update_oauth_user(
             db.commit()
             db.refresh(user)
 
+        # Create API keys from OAuth token if this is a new OAuth connection
+        # and the provider supports API keys
+        if is_new_oauth_connection:
+            # Create API keys from OAuth token
+            create_api_keys_from_oauth(user, db)
+
         return user
     except Exception as e:
         db.rollback()
@@ -400,7 +422,7 @@ def create_or_update_oauth_user(
 
 def refresh_oauth_token(user: User) -> bool:
     """
-    Refresh the OAuth token for a user
+    Refresh the OAuth token for a user and update related API keys
     """
     if not user or not user.oauth_provider or not user.oauth_refresh_token:
         return False
@@ -428,11 +450,14 @@ def refresh_oauth_token(user: User) -> bool:
 
         # Update the user's token
         db = SessionLocal()
-        user.oauth_access_token = encrypt_data(token.get("access_token", ""))
+        new_access_token = token.get("access_token", "")
+        user.oauth_access_token = encrypt_data(new_access_token)
 
         # Only update refresh token if provided
+        new_refresh_token = None
         if token.get("refresh_token"):
-            user.oauth_refresh_token = encrypt_data(token.get("refresh_token", ""))
+            new_refresh_token = token.get("refresh_token", "")
+            user.oauth_refresh_token = encrypt_data(new_refresh_token)
 
         # Set token expiry if provided
         if token.get("expires_in"):
@@ -441,6 +466,28 @@ def refresh_oauth_token(user: User) -> bool:
             )
 
         user.updated_at = datetime.utcnow()
+
+        # Also update any API keys that use this OAuth provider
+        if config.get("supports_api_keys") and config.get("api_services"):
+            from src.models.database import ApiKey
+
+            # Find all OAuth-connected API keys for this user
+            oauth_keys = (
+                db.query(ApiKey)
+                .filter(
+                    ApiKey.user_id == user.id,
+                    ApiKey.is_oauth.is_(True),
+                    ApiKey.oauth_provider == user.oauth_provider,
+                )
+                .all()
+            )
+
+            # Update each API key with the new token
+            for key in oauth_keys:
+                key.encrypted_key = encrypt_data(new_access_token)
+                if new_refresh_token:
+                    key.encrypted_secret = encrypt_data(new_refresh_token)
+
         db.commit()
 
         return True
@@ -468,3 +515,71 @@ def get_oauth_access_token(user: User) -> Optional[str]:
 
     # Decrypt and return the access token
     return decrypt_data(user.oauth_access_token)
+
+
+def create_api_keys_from_oauth(user: User, db=None) -> Dict[str, bool]:
+    """
+    Create API keys from OAuth tokens for services that support it.
+
+    Args:
+        user: User object
+        db: Database session (optional, will create a new session if not provided)
+
+    Returns:
+        Dictionary mapping service names to success status
+    """
+    if not user or not user.oauth_provider:
+        return {}
+
+    # Get OAuth provider config
+    provider = user.oauth_provider
+    config = OAUTH_CONFIGS.get(provider)
+
+    if not config or not config.get("supports_api_keys"):
+        return {}
+
+    # Get OAuth token
+    token = get_oauth_access_token(user)
+    if not token:
+        return {}
+
+    # Create database session if not provided
+    close_db = False
+    if db is None:
+        from src.models.database import SessionLocal
+
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        # Import here to avoid circular imports
+        from src.utils.security import store_oauth_api_key
+
+        results = {}
+        # Create API keys for each supported service
+        for service in config.get("api_services", []):
+            # Get refresh token if available
+            refresh_token = None
+            if user.oauth_refresh_token:
+                refresh_token = decrypt_data(user.oauth_refresh_token)
+
+            # Store the API key
+            try:
+                api_key = store_oauth_api_key(
+                    db,
+                    user.id,
+                    service,
+                    token,
+                    refresh_token,
+                    provider,
+                    f"{config['display_name']} {service.capitalize()}",
+                )
+                results[service] = api_key is not None
+            except Exception as e:
+                print(f"Error creating API key for {service}: {str(e)}")
+                results[service] = False
+
+        return results
+    finally:
+        if close_db:
+            db.close()

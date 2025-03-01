@@ -1,18 +1,12 @@
-import json
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Union
 
-import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from src.api.ai_analysis import (
     analyze_with_best_model,
-    analyze_with_ollama,
-    analyze_with_openai,
 )
 from src.models.database import PortfolioOptimization, SessionLocal
 from src.utils.auth import require_login
@@ -739,9 +733,6 @@ def display_portfolio_results(optimization_result: Dict):
         st.write("Toggle ETFs to display:")
         cols = st.columns(3)
 
-        # Always show the optimal portfolio
-        show_portfolio = True
-
         # Initialize etf visibility in session state if not present
         if "etf_visibility" not in st.session_state:
             st.session_state.etf_visibility = {}
@@ -903,7 +894,7 @@ def display_portfolio_results(optimization_result: Dict):
                                     start_date = pd.to_datetime(series.index[0])
                                     end_date = pd.to_datetime(series.index[-1])
                                     days = (end_date - start_date).days
-                                except:
+                                except Exception:
                                     # If conversion fails, estimate based on length of series
                                     # Assume daily data
                                     days = len(series)

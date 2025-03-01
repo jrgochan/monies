@@ -1,7 +1,7 @@
-import os
-
 import streamlit as st
 from dotenv import load_dotenv
+from src.components.navigation import sidebar_navigation
+from src.utils.auth import handle_oauth_callback
 
 # Load environment variables
 load_dotenv()
@@ -13,12 +13,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# Import navigation components
-from src.components.navigation import sidebar_navigation
-
-# Import auth module for OAuth callback handling
-from src.utils.auth import handle_oauth_callback
 
 
 def main():

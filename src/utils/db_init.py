@@ -1,9 +1,9 @@
-import os
 import logging
-import json
-from src.models.database import init_db, SessionLocal, User, DataSource
-from src.utils.auth import hash_password
+
 from dotenv import load_dotenv
+
+from src.models.database import DataSource, SessionLocal, User, init_db
+from src.utils.auth import hash_password
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)

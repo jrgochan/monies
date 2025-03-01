@@ -1,11 +1,9 @@
-import pandas as pd
-import numpy as np
 import logging
-import json
-from typing import Dict, List, Any, Tuple, Optional
-from datetime import datetime, timedelta
+from typing import Any, Dict, List
+
 from sqlalchemy.orm import Session
-from src.models.database import DataSource, UserDataSource, User
+
+from src.models.database import DataSource, UserDataSource
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -39,8 +37,8 @@ class DataAggregator:
                 isouter=True,
             )
             .filter(
-                (UserDataSource.user_id == user_id) | (UserDataSource.id == None),
-                DataSource.enabled == True,
+                (UserDataSource.user_id == user_id) | (UserDataSource.id.is_(None)),
+                DataSource.enabled.is_(True),
             )
         )
 
@@ -95,7 +93,7 @@ class DataAggregator:
         Returns:
             List of data source dictionaries
         """
-        query = db.query(DataSource).filter(DataSource.enabled == True)
+        query = db.query(DataSource).filter(DataSource.enabled.is_(True))
 
         if category:
             query = query.filter(DataSource.category == category)

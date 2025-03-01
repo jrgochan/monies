@@ -1,10 +1,9 @@
-import tweepy
-import requests
-import json
 import logging
 import os
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+
+import requests
+import tweepy
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -194,6 +193,56 @@ def analyze_social_sentiment(query):
     return {"positive": 0.65, "negative": 0.15, "neutral": 0.20, "overall": "positive"}
 
 
+def get_twitter_sentiment(query, days=7):
+    """
+    Get sentiment analysis for a Twitter search query over a specified number of days.
+
+    Args:
+        query: Search term or hashtag to analyze
+        days: Number of days to look back for tweets
+
+    Returns:
+        Dictionary with sentiment analysis results
+    """
+    # For demonstration purposes, return mock data
+    sentiment_data = {
+        "positive": 65,
+        "neutral": 20,
+        "negative": 15,
+        "total_posts": 250,
+        "trending_words": ["moon", "bullish", "invest", "future", "gains"],
+        "notable_accounts": ["@elonmusk", "@CryptoAnalyst", "@TechInvestor"],
+        "recent_posts": [
+            {
+                "text": f"Really bullish on {query} right now! The fundamentals are strong and the technical analysis looks promising. #investing",
+                "user": "CryptoAnalyst",
+                "likes": 432,
+                "sentiment": "positive",
+            },
+            {
+                "text": f"Just increased my position in {query}. The recent dip was a great buying opportunity.",
+                "user": "InvestorDaily",
+                "likes": 256,
+                "sentiment": "positive",
+            },
+            {
+                "text": f"Not sure about {query} at current prices. Might be overvalued considering market conditions.",
+                "user": "TechInvestor",
+                "likes": 187,
+                "sentiment": "neutral",
+            },
+            {
+                "text": f"Disappointed with the performance of {query} lately. Was expecting more after the recent announcements.",
+                "user": "StockTrader",
+                "likes": 92,
+                "sentiment": "negative",
+            },
+        ],
+    }
+
+    return sentiment_data
+
+
 def analyze_text_sentiment(text):
     """
     Analyze sentiment of a given text.
@@ -206,7 +255,7 @@ def schedule_post(user_id, platform, content, scheduled_time, media_path=None):
     """
     Schedule a post for later publishing.
     """
-    from src.models.database import SessionLocal, ScheduledPost
+    from src.models.database import ScheduledPost, SessionLocal
 
     db = SessionLocal()
     try:
@@ -243,7 +292,7 @@ def get_scheduled_posts(user_id):
     """
     Get all scheduled posts for a user.
     """
-    from src.models.database import SessionLocal, ScheduledPost
+    from src.models.database import ScheduledPost, SessionLocal
 
     db = SessionLocal()
     try:
@@ -252,7 +301,7 @@ def get_scheduled_posts(user_id):
             db.query(ScheduledPost)
             .filter(
                 ScheduledPost.user_id == user_id,
-                ScheduledPost.posted == False,
+                ScheduledPost.posted.is_(False),
                 ScheduledPost.scheduled_time > datetime.utcnow(),
             )
             .order_by(ScheduledPost.scheduled_time)
@@ -285,7 +334,7 @@ def cancel_scheduled_post(post_id):
     """
     Cancel a scheduled post.
     """
-    from src.models.database import SessionLocal, ScheduledPost
+    from src.models.database import ScheduledPost, SessionLocal
 
     db = SessionLocal()
     try:
@@ -314,7 +363,7 @@ def publish_scheduled_posts():
     Publish all scheduled posts that are due.
     This function would be called by a scheduler.
     """
-    from src.models.database import SessionLocal, ScheduledPost, SocialAccount
+    from src.models.database import ScheduledPost, SessionLocal, SocialAccount
     from src.utils.security import decrypt_data
 
     db = SessionLocal()
@@ -323,7 +372,9 @@ def publish_scheduled_posts():
         now = datetime.utcnow()
         posts = (
             db.query(ScheduledPost)
-            .filter(ScheduledPost.posted == False, ScheduledPost.scheduled_time <= now)
+            .filter(
+                ScheduledPost.posted.is_(False), ScheduledPost.scheduled_time <= now
+            )
             .all()
         )
 

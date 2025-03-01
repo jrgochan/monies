@@ -1,9 +1,10 @@
-import json
 import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple
+
+from src.utils.api_config import APIConfigManager
 
 import numpy as np
 import openai
@@ -34,17 +35,10 @@ except Exception as e:
     logger.warning(f"Could not initialize OpenAI client: {str(e)}")
     # Try without proxies parameter that might be causing the error
     try:
-        import os
-
-        import openai
-
         openai.api_key = os.getenv("OPENAI_API_KEY", "")
         client = openai.OpenAI()
     except Exception as e2:
         logger.warning(f"Second attempt to initialize OpenAI client failed: {str(e2)}")
-
-# AI model settings
-from src.utils.api_config import APIConfigManager
 
 
 def get_ollama_settings():
@@ -239,7 +233,10 @@ def analyze_with_ollama(
     # Customize system prompt based on task type
     system_prompt = ""
     if task_type == "finance":
-        system_prompt = "You are a financial analyst providing insights on market data. Be concise and factual."
+        system_prompt = (
+            "You are a financial analyst providing insights on market data. "
+            "Be concise and factual."
+        )
     elif task_type == "coding":
         system_prompt = (
             "You are a programming expert helping with code analysis and development."
@@ -262,7 +259,8 @@ def analyze_with_ollama(
 
         logger.info(f"Making Ollama API request to: {request_url}")
         logger.info(
-            f"Request body: model={model}, prompt length={len(final_prompt)}, system prompt length={len(system_prompt)}"
+            f"Request body: model={model}, prompt length={len(final_prompt)}, "
+            f"system prompt length={len(system_prompt)}"
         )
 
         response = requests.post(
@@ -284,7 +282,10 @@ def analyze_with_ollama(
             logger.error(
                 f"Ollama API error 404: Model '{model}' not found or Ollama server not running"
             )
-            return f"Error: Model '{model}' not found or Ollama server not running. Please check your Ollama installation."
+            return (
+                f"Error: Model '{model}' not found or Ollama server not running. "
+                f"Please check your Ollama installation."
+            )
         else:
             logger.error(f"Ollama API error: {response.status_code} - {response.text}")
             return f"Error: {response.status_code} - {response.text}"
@@ -554,8 +555,6 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
 
     try:
         if user_id:
-            import json
-
             from src.models.database import SessionLocal
             from src.utils.data_aggregator import DataAggregator
 
@@ -567,10 +566,12 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
 
             if user and user.data_source_preferences:
                 try:
+                    import json
+
                     preferences = json.loads(user.data_source_preferences)
                     if "stocks" in preferences:
                         user_preferences = preferences["stocks"]
-                except:
+                except Exception:
                     user_preferences = None
 
             # Get enabled data sources in priority order
@@ -1218,7 +1219,7 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
         # Calculate volume average with error handling
         try:
             volume_avg = int(hist["Volume"].mean()) if "Volume" in hist.columns else 0
-        except:
+        except Exception:
             volume_avg = 0
 
         # Create data object
@@ -1407,7 +1408,7 @@ def get_etf_recommendations(
             try:
                 result["analysis"] = analyze_with_openai(prompt, task_type="finance")
                 result["model_used"] = "OpenAI"
-            except Exception as e:
+            except Exception:
                 try:
                     # Get user's preferred model from settings
                     _, configured_model = get_ollama_settings()
@@ -1416,7 +1417,9 @@ def get_etf_recommendations(
                     )
                     result["model_used"] = f"Ollama ({configured_model})"
                 except Exception as ollama_error:
-                    logger.warning(f"ETF analysis with Ollama failed: {str(ollama_error)}")
+                    logger.warning(
+                        f"ETF analysis with Ollama failed: {str(ollama_error)}"
+                    )
                     result[
                         "analysis"
                     ] = f"These ETFs are tailored for {risk_profile} investors, providing a balanced approach to market exposure. Consider individual research before investing."
@@ -1520,3 +1523,88 @@ def generate_generic_analysis(prompt: str) -> str:
         task_type="general",
         fallback_message="Analysis could not be generated at this time. Please try again later.",
     )
+
+
+def generate_social_post(post_type: str, post_data: dict) -> str:
+    """
+    Generate social media post content based on type and data.
+
+    Args:
+        post_type: Type of post to generate (portfolio_update, market_update, investment_tip)
+        post_data: Dictionary containing data specific to the post type
+
+    Returns:
+        Generated post content as string
+    """
+    try:
+        # Build a prompt based on post type
+        if post_type == "portfolio_update":
+            portfolio_value = post_data.get("portfolio_value", 10000)
+            daily_change = post_data.get("daily_change", 0)
+            top_assets = post_data.get("top_assets", [])
+
+            # Format top assets for the prompt
+            assets_str = ", ".join(top_assets[:3]) if top_assets else "various assets"
+
+            prompt = f"""
+            Create a concise social media post (max 280 characters) about a portfolio update with the following details:
+            - Portfolio value: ${portfolio_value:,.2f}
+            - Daily change: {daily_change}%
+            - Top performing assets: {assets_str}
+
+            The tone should be professional but conversational. Include a relevant emoji or two.
+            Do not use hashtags unless they add significant value.
+            """
+
+        elif post_type == "market_update":
+            market_data = post_data.get("market_data", {})
+            btc_price = market_data.get("btc_price", 69000)
+            eth_price = market_data.get("eth_price", 3500)
+            market_trend = market_data.get("market_trend", "neutral")
+            sentiment = post_data.get("sentiment", "neutral")
+
+            prompt = f"""
+            Create a concise social media post (max 280 characters) about current market conditions:
+            - Bitcoin price: ${btc_price:,.2f}
+            - Ethereum price: ${eth_price:,.2f}
+            - Overall market trend: {market_trend}
+            - Market sentiment: {sentiment}
+
+            The tone should be factual with a hint of {sentiment} outlook. Include 1-2
+            relevant emojis. Focus on providing value, not just sharing prices.
+            """
+
+        elif post_type == "investment_tip":
+            topic = post_data.get("topic", "diversification")
+
+            # Map topic to a more descriptive version
+            topic_map = {
+                "diversification": "portfolio diversification",
+                "dollar_cost_averaging": "dollar-cost averaging (DCA)",
+                "risk_management": "risk management",
+                "emergency_fund": "maintaining an emergency fund",
+                "tax_efficiency": "tax-efficient investing",
+            }
+
+            topic_desc = topic_map.get(topic, topic)
+
+            prompt = f"""
+            Create a concise social media post (max 280 characters) sharing an investment tip about {topic_desc}.
+            The tone should be helpful and educational without being preachy.
+            Include a relevant emoji or two to make the post more engaging.
+            The tip should be actionable and valuable to both beginner and intermediate investors.
+            """
+
+        else:
+            return "Error: Unsupported post type. Please choose from portfolio_update, market_update, or investment_tip."
+
+        # Generate the post content using the best available model
+        return analyze_with_best_model(
+            prompt,
+            task_type="finance",
+            fallback_message="📊 Market update: BTC at $69k, ETH at $3.5k. Overall sentiment remains cautiously optimistic despite recent volatility. Keep an eye on upcoming economic data releases.",
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating social post: {str(e)}")
+        return f"Error: Could not generate post content - {str(e)}"

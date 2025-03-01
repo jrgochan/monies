@@ -1,9 +1,7 @@
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 from src.api.exchanges import get_current_prices
@@ -81,8 +79,7 @@ def get_portfolio_history(wallets=None):
     """Get portfolio history data. This function returns an error flag
     if it cannot connect to external data sources.
     """
-    # Initialize error flag
-    error = False
+    # Initialize error message
     error_message = ""
 
     # Create a valid portfolio structure
@@ -108,7 +105,6 @@ def get_portfolio_history(wallets=None):
 
                 # Check if prices have an error
                 if "error" in prices:
-                    error = True
                     error_message = prices["error"]
                     # Return error dataframe
                     return pd.DataFrame(
@@ -128,7 +124,6 @@ def get_portfolio_history(wallets=None):
             import logging
 
             logging.error(f"Error generating portfolio history: {str(e)}")
-            error = True
             error_message = f"Failed to retrieve portfolio data: {str(e)}"
             # Return error dataframe
             return pd.DataFrame(

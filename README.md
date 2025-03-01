@@ -57,9 +57,13 @@ cp oauth.env.example .env
 # - Coinbase
 ```
 
-5. Run the OAuth database migration:
+5. Run the OAuth database migrations:
 ```bash
+# Initial OAuth setup
 ./scripts/migrate_oauth.py
+
+# OAuth scope and API key integration
+./scripts/migrate_oauth_scopes.py
 ```
 
 ## Running the Application
@@ -91,9 +95,27 @@ streamlit run app.py
   - Google, Facebook, Twitter, GitHub, Microsoft, and Coinbase
 - Connect your Coinbase account for seamless wallet integration
 
+### OAuth Integration
+
+The app supports OAuth 2.0 integration with various API platforms. This provides several benefits:
+
+- **Simplified Authentication**: Connect with just a few clicks without managing API keys
+- **Enhanced Security**: No need to store API secrets in the app
+- **Automatic Token Refresh**: Tokens are automatically refreshed when they expire
+- **Multiple Connections**: You can have multiple API keys for the same service
+
+To connect an API via OAuth:
+1. Go to the Settings page
+2. Click on the "API Connections" tab
+3. Select the OAuth provider to connect with (e.g., Coinbase)
+4. Authorize the application with the requested permissions
+5. Your connection will be automatically set up and usable throughout the app
+
 ### Wallet Management
 
-- Connect exchange accounts using API keys
+- Connect exchange accounts using API keys or OAuth:
+  - **API Keys**: Manually enter API keys for any supported exchange
+  - **OAuth**: One-click connection for Coinbase and other supported providers
 - Add on-chain wallets by address
 - View balances and transaction history
 - Send and receive cryptocurrency

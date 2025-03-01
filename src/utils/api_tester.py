@@ -1,13 +1,10 @@
 import json
 import logging
-import os
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import ccxt
-import openai
 import requests
-import yfinance as yf
 from dotenv import load_dotenv
 from openai import APIConnectionError, BadRequestError, OpenAI
 
@@ -30,7 +27,7 @@ class APITester:
             client = OpenAI(api_key=api_key)
 
             # Try a simple completion to check if the API key works
-            response = client.chat.completions.create(
+            client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello, this is a test!"}],
                 max_tokens=10,
@@ -38,7 +35,7 @@ class APITester:
             return True, "Successfully connected to OpenAI API"
         except APIConnectionError as e:
             logger.error(f"OpenAI API connection failed: {str(e)}")
-            return False, f"Failed to connect to OpenAI API: Connection error"
+            return False, "Failed to connect to OpenAI API: Connection error"
         except BadRequestError as e:
             logger.error(f"OpenAI API request error: {str(e)}")
             return False, f"OpenAI API request error: {str(e)}"
@@ -83,7 +80,7 @@ class APITester:
             try:
                 client = Client(api_key, api_secret, tld="us")
                 # Test connection by requesting account info
-                info = client.get_account()
+                client.get_account()
                 return True, "Successfully connected to Binance.US API"
             except Exception as e:
                 # If US endpoint fails, try regular Binance
@@ -99,7 +96,7 @@ class APITester:
                 try:
                     client = Client(api_key, api_secret)
                     # Test connection by requesting account info
-                    info = client.get_account()
+                    client.get_account()
                     return True, "Successfully connected to Binance API"
                 except Exception as e2:
                     return (
@@ -234,7 +231,7 @@ class APITester:
                     False,
                     "Cannot resolve Yahoo Finance domain - service may be temporarily unavailable",
                 )
-            except:
+            except Exception:
                 return (
                     False,
                     "Internet connectivity issue - please check your network connection",
@@ -281,7 +278,8 @@ class APITester:
             import base64
             import hashlib
             import hmac
-            import json
+
+            # json is already imported at the top
 
             # Base URL for Gemini API
             url = "https://api.gemini.com/v1/account"

@@ -1,16 +1,17 @@
-import ccxt
-from binance.client import Client as BinanceClient
-import time
-import logging
-from typing import Dict, List, Tuple, Optional
-from dotenv import load_dotenv
-import os
-import json
-import hmac
-import hashlib
-import requests
-from urllib.parse import urlencode
 import base64
+import hashlib
+import hmac
+import json
+import logging
+import os
+import time
+from typing import Dict, List
+from urllib.parse import urlencode
+
+import ccxt
+import requests
+from binance.client import Client as BinanceClient
+from dotenv import load_dotenv
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -20,34 +21,74 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-def get_exchange_client(exchange_name: str, api_key: str, api_secret: str):
+def get_exchange_client(
+    exchange_name: str,
+    api_key: str = None,
+    api_secret: str = None,
+    oauth_token: str = None,
+):
     """
     Get the appropriate exchange client based on exchange name.
+    Supports both API key authentication and OAuth authentication for some exchanges.
+
+    Args:
+        exchange_name: Name of the exchange (e.g., 'binance', 'coinbase')
+        api_key: API key for the exchange (optional if using OAuth)
+        api_secret: API secret for the exchange (optional if using OAuth)
+        oauth_token: OAuth access token for the exchange (optional)
+
+    Returns:
+        Exchange client instance if successful, None otherwise
     """
-    if not api_key or not api_secret:
+    # Check if we have valid credentials
+    has_api_keys = api_key and api_secret
+    has_oauth = oauth_token is not None
+
+    if not has_api_keys and not has_oauth:
         logger.error(f"Missing API credentials for {exchange_name}")
         return None
 
     try:
         if exchange_name.lower() == "binance":
+            # Binance doesn't support OAuth, so we need API keys
+            if not has_api_keys:
+                logger.error("Binance requires API key and secret")
+                return None
+
             # Use python-binance library with US endpoint for Binance
             client = BinanceClient(api_key, api_secret, tld="us")
             # Test connection
             client.get_account()
             return client
         elif exchange_name.lower() == "binanceus":
+            # Binance.US doesn't support OAuth, so we need API keys
+            if not has_api_keys:
+                logger.error("Binance.US requires API key and secret")
+                return None
+
             # Use python-binance library with explicit US endpoint
             client = BinanceClient(api_key, api_secret, tld="us")
             # Test connection
             client.get_account()
             return client
         elif exchange_name.lower() == "coinbase":
-            # Create a custom Coinbase client
-            client = CoinbaseClient(api_key, api_secret)
+            # Coinbase supports both API key and OAuth authentication
+            if has_oauth:
+                # Create a custom Coinbase client with OAuth
+                client = CoinbaseClient(oauth_token=oauth_token)
+            else:
+                # Create a custom Coinbase client with API keys
+                client = CoinbaseClient(api_key, api_secret)
+
             # Test connection
             client.get_accounts()
             return client
         else:
+            # Other exchanges via CCXT don't support OAuth, so we need API keys
+            if not has_api_keys:
+                logger.error(f"{exchange_name} requires API key and secret")
+                return None
+
             # Use CCXT for other exchanges
             exchange_class = getattr(ccxt, exchange_name.lower())
             exchange = exchange_class(
@@ -63,7 +104,8 @@ def get_exchange_client(exchange_name: str, api_key: str, api_secret: str):
             or "geographical restrictions" in error_msg
         ):
             logger.error(
-                f"Binance access error: Service unavailable due to geographical restrictions. Using Binance.US or a VPN may resolve this issue."
+                "Binance access error: Service unavailable due to geographical restrictions. "
+                "Using Binance.US or a VPN may resolve this issue."
             )
         else:
             logger.error(f"Error connecting to {exchange_name}: {error_msg}")
@@ -73,25 +115,39 @@ def get_exchange_client(exchange_name: str, api_key: str, api_secret: str):
 class CoinbaseClient:
     """
     Custom Coinbase client to manage API requests
+    Supports both API key authentication and OAuth authentication
     """
 
-    def __init__(self, api_key: str, api_secret: str):
-        # Handle CDP API keys (keys containing organization ID)
-        if ":" in api_key:
-            # Format is typically: organization_id:api_key
-            parts = api_key.split(":")
-            if len(parts) == 2:
-                self.organization_id = parts[0]
-                self.api_key = parts[1]
+    def __init__(
+        self, api_key: str = None, api_secret: str = None, oauth_token: str = None
+    ):
+        # Store authentication method
+        self.auth_method = "oauth" if oauth_token else "api_key"
+        self.oauth_token = oauth_token
+
+        # Handle API key auth if provided
+        if api_key:
+            # Handle CDP API keys (keys containing organization ID)
+            if ":" in api_key:
+                # Format is typically: organization_id:api_key
+                parts = api_key.split(":")
+                if len(parts) == 2:
+                    self.organization_id = parts[0]
+                    self.api_key = parts[1]
+                else:
+                    # If format is unexpected, use as-is
+                    self.organization_id = None
+                    self.api_key = api_key
             else:
-                # If format is unexpected, use as-is
                 self.organization_id = None
                 self.api_key = api_key
-        else:
-            self.organization_id = None
-            self.api_key = api_key
 
-        self.api_secret = api_secret
+            self.api_secret = api_secret
+        else:
+            self.api_key = None
+            self.api_secret = None
+            self.organization_id = None
+
         self.api_url = "https://api.coinbase.com"
         self.api_version = "2021-08-08"
 
@@ -110,9 +166,8 @@ class CoinbaseClient:
     def _request(
         self, method: str, endpoint: str, params: dict = None, data: dict = None
     ) -> dict:
-        """Make request to Coinbase API"""
+        """Make request to Coinbase API using either API key or OAuth token"""
         url = f"{self.api_url}{endpoint}"
-        timestamp = str(int(time.time()))
 
         # Add query parameters to URL if provided
         if params:
@@ -125,21 +180,32 @@ class CoinbaseClient:
         if data:
             body = json.dumps(data)
 
-        # Generate signature
-        signature = self._generate_signature(timestamp, method, endpoint, body)
-
-        # Create headers
+        # Create headers based on authentication method
         headers = {
-            "CB-ACCESS-KEY": self.api_key,
-            "CB-ACCESS-SIGN": signature,
-            "CB-ACCESS-TIMESTAMP": timestamp,
-            "CB-VERSION": self.api_version,
             "Content-Type": "application/json",
         }
 
-        # Add organization ID if present (for CDP API keys)
-        if self.organization_id:
-            headers["CB-ACCESS-PROJECT"] = self.organization_id
+        if self.auth_method == "oauth":
+            # OAuth authentication
+            headers["Authorization"] = f"Bearer {self.oauth_token}"
+            headers["CB-VERSION"] = self.api_version
+        else:
+            # API key authentication
+            timestamp = str(int(time.time()))
+            signature = self._generate_signature(timestamp, method, endpoint, body)
+
+            headers.update(
+                {
+                    "CB-ACCESS-KEY": self.api_key,
+                    "CB-ACCESS-SIGN": signature,
+                    "CB-ACCESS-TIMESTAMP": timestamp,
+                    "CB-VERSION": self.api_version,
+                }
+            )
+
+            # Add organization ID if present (for CDP API keys)
+            if self.organization_id:
+                headers["CB-ACCESS-PROJECT"] = self.organization_id
 
         # Make request
         response = requests.request(method, url, headers=headers, data=body)
@@ -168,7 +234,7 @@ class CoinbaseClient:
 
     def get_exchange_rates(self, currency: str = "USD") -> dict:
         """Get exchange rates for a base currency"""
-        response = self._request("GET", f"/v2/exchange-rates", {"currency": currency})
+        response = self._request("GET", "/v2/exchange-rates", {"currency": currency})
         return response["data"]["rates"]
 
     def place_market_order(self, action: str, amount: str, currency: str) -> dict:
@@ -202,10 +268,23 @@ class CoinbaseClient:
         return transactions["data"]
 
 
-def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dict:
+def get_wallet_balance(
+    exchange_name: str,
+    api_key: str = None,
+    api_secret: str = None,
+    oauth_token: str = None,
+) -> Dict:
     """
     Get wallet balances from the specified exchange.
-    Returns a dictionary of currency -> balance
+
+    Args:
+        exchange_name: Name of the exchange (e.g., 'binance', 'coinbase')
+        api_key: API key for the exchange (optional if using OAuth)
+        api_secret: API secret for the exchange (optional if using OAuth)
+        oauth_token: OAuth access token for the exchange (optional)
+
+    Returns:
+        A dictionary of currency -> balance
     """
     result = {}
 
@@ -232,9 +311,10 @@ def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dic
                 if total > 0:
                     result[currency] = {"free": free, "locked": locked, "total": total}
         elif exchange_name.lower() == "coinbase":
-            client = get_exchange_client("coinbase", api_key, api_secret)
+            # Get client with either API keys or OAuth token
+            client = get_exchange_client("coinbase", api_key, api_secret, oauth_token)
             if not client:
-                logger.warning("Coinbase access failed. Check your API keys.")
+                logger.warning("Coinbase access failed. Check your credentials.")
                 return result
 
             # Get account info from Coinbase
@@ -246,8 +326,8 @@ def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dic
                 amount = float(account["balance"]["amount"])
 
                 if amount > 0:
-                    # Coinbase doesn't distinguish between free and locked balances in the same way
-                    # We'll use the available balance as free and the difference as locked
+                    # Coinbase doesn't distinguish between free and locked balances
+                    # Use available balance as free and the difference as locked
                     # If available amount is not provided, assume all funds are free
                     if "available" in account:
                         available = float(account["available"])
@@ -286,7 +366,8 @@ def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dic
             or "geographical restrictions" in error_msg
         ):
             logger.error(
-                f"Access error: Service unavailable due to geographical restrictions. Make sure your API keys are from Binance.US, not regular Binance."
+                "Access error: Service unavailable due to geographical restrictions. "
+                "Make sure your API keys are from Binance.US, not regular Binance."
             )
         else:
             logger.error(f"Error fetching balances from {exchange_name}: {error_msg}")
@@ -294,19 +375,33 @@ def get_wallet_balance(exchange_name: str, api_key: str, api_secret: str) -> Dic
     # If we have no results, return an empty dictionary with error flag
     if not result:
         logger.error(
-            f"Failed to retrieve wallet data from {exchange_name}. Check API credentials and network connection."
+            f"Failed to retrieve wallet data from {exchange_name}. "
+            f"Check API credentials and network connection."
         )
         # Return empty result with error indicator
         result = {
-            "error": f"Cannot connect to {exchange_name}. Please check your API credentials and network connection."
+            "error": (
+                f"Cannot connect to {exchange_name}. "
+                f"Please check your API credentials and network connection."
+            )
         }
 
     return result
 
 
-def get_current_prices(exchange_name: str, currencies: List[str] = None) -> Dict:
+def get_current_prices(
+    exchange_name: str, currencies: List[str] = None, oauth_token: str = None
+) -> Dict:
     """
     Get current prices for currencies against USD or USDT.
+
+    Args:
+        exchange_name: Name of the exchange (e.g., 'binance', 'coinbase')
+        currencies: List of currency symbols to get prices for (optional)
+        oauth_token: OAuth access token for the exchange (optional)
+
+    Returns:
+        A dictionary of currency -> price
     """
     result = {}
 
@@ -332,47 +427,53 @@ def get_current_prices(exchange_name: str, currencies: List[str] = None) -> Dict
                     if currencies is None or base_currency in currencies:
                         result[base_currency] = float(ticker["price"])
         elif exchange_name.lower() == "coinbase":
-            # Use API key from environment for Coinbase
-            api_key = os.getenv("COINBASE_API_KEY", "")
-            api_secret = os.getenv("COINBASE_SECRET_KEY", "")
+            # Create client with either OAuth token or API keys from environment
+            if oauth_token:
+                # Use OAuth token directly
+                client = CoinbaseClient(oauth_token=oauth_token)
+            else:
+                # Try to use API keys from environment
+                api_key = os.getenv("COINBASE_API_KEY", "")
+                api_secret = os.getenv("COINBASE_SECRET_KEY", "")
 
-            if api_key and api_secret:
-                # Create client
+                if not api_key or not api_secret:
+                    logger.warning("No Coinbase credentials provided")
+                    return result
+
                 client = CoinbaseClient(api_key, api_secret)
 
-                # If currencies are specified, get prices for each one
-                if currencies:
-                    for currency in currencies:
-                        try:
-                            # Get spot price
-                            spot_price = client.get_spot_price(f"{currency}-USD")
-                            result[currency] = spot_price
-                        except Exception as e:
-                            logger.warning(
-                                f"Could not get price for {currency} from Coinbase: {str(e)}"
-                            )
-                else:
-                    # Without specific currencies, get exchange rates based on USD
+            # If currencies are specified, get prices for each one
+            if currencies:
+                for currency in currencies:
                     try:
-                        # Using exchange rates for better efficiency when getting multiple prices
-                        rates = client.get_exchange_rates("USD")
-
-                        # Convert rates to prices (1/rate for USD base)
-                        for currency, rate in rates.items():
-                            if currency != "USD" and rate != "0":
-                                # We need to invert the rate since we want price in USD
-                                try:
-                                    price = 1 / float(rate)
-                                    result[currency] = price
-                                except (ValueError, ZeroDivisionError):
-                                    # Skip currencies with invalid rates
-                                    pass
+                        # Get spot price
+                        spot_price = client.get_spot_price(f"{currency}-USD")
+                        result[currency] = spot_price
                     except Exception as e:
-                        logger.error(
-                            f"Error fetching exchange rates from Coinbase: {str(e)}"
+                        logger.warning(
+                            f"Could not get price for {currency} from Coinbase: "
+                            f"{str(e)}"
                         )
             else:
-                logger.warning("Coinbase API keys not found in environment variables")
+                # Without specific currencies, get exchange rates based on USD
+                try:
+                    # Using exchange rates for better efficiency when getting multiple prices
+                    rates = client.get_exchange_rates("USD")
+
+                    # Convert rates to prices (1/rate for USD base)
+                    for currency, rate in rates.items():
+                        if currency != "USD" and rate != "0":
+                            # We need to invert the rate since we want price in USD
+                            try:
+                                price = 1 / float(rate)
+                                result[currency] = price
+                            except (ValueError, ZeroDivisionError):
+                                # Skip currencies with invalid rates
+                                pass
+                except Exception as e:
+                    logger.error(
+                        f"Error fetching exchange rates from Coinbase: {str(e)}"
+                    )
         else:
             # Use CCXT for other exchanges
             exchange_class = getattr(ccxt, exchange_name.lower(), None)
@@ -403,7 +504,8 @@ def get_current_prices(exchange_name: str, currencies: List[str] = None) -> Dict
             if currencies:
                 crypto_ids = [c.lower() for c in currencies]
                 ids_param = ",".join(crypto_ids)
-                api_url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids_param}&vs_currencies=usd"
+                base_url = "https://api.coingecko.com/api/v3/simple/price"
+                api_url = f"{base_url}?ids={ids_param}&vs_currencies=usd"
                 response = requests.get(api_url)
 
                 if response.status_code == 200:
@@ -440,30 +542,45 @@ def get_current_prices(exchange_name: str, currencies: List[str] = None) -> Dict
         # Set error flag in the result dictionary
         result[
             "error"
-        ] = f"Cannot connect to price data source. Please check your network connection."
+        ] = "Cannot connect to price data source. Please check your network connection."
 
     return result
 
 
 def place_order(
     exchange_name: str,
-    api_key: str,
-    api_secret: str,
     symbol: str,
     order_type: str,  # 'market', 'limit'
     side: str,  # 'buy', 'sell'
     amount: float,
     price: float = None,  # Required for limit orders
+    api_key: str = None,
+    api_secret: str = None,
+    oauth_token: str = None,
 ) -> Dict:
     """
     Place an order on the exchange.
+
+    Args:
+        exchange_name: Name of the exchange (e.g., 'binance', 'coinbase')
+        symbol: Trading pair symbol (e.g., 'BTC/USD', 'BTCUSD')
+        order_type: Type of order ('market' or 'limit')
+        side: Side of the order ('buy' or 'sell')
+        amount: Amount to buy or sell
+        price: Price for limit orders (optional)
+        api_key: API key for the exchange (optional if using OAuth)
+        api_secret: API secret for the exchange (optional if using OAuth)
+        oauth_token: OAuth access token for the exchange (optional)
+
+    Returns:
+        Dictionary with order result information
     """
     result = {"success": False, "order_id": None, "message": ""}
 
     try:
         # Always use binanceus for Binance
         if exchange_name.lower() in ["binance", "binanceus"]:
-            # Use binanceus client
+            # Use binanceus client (OAuth not supported)
             client = get_exchange_client("binanceus", api_key, api_secret)
             if not client:
                 result["message"] = "Failed to connect to Binance.US"
@@ -500,8 +617,8 @@ def place_order(
             result["message"] = "Order placed successfully"
 
         elif exchange_name.lower() == "coinbase":
-            # Use Coinbase client
-            client = get_exchange_client("coinbase", api_key, api_secret)
+            # Use Coinbase client with either API key or OAuth token
+            client = get_exchange_client("coinbase", api_key, api_secret, oauth_token)
             if not client:
                 result["message"] = "Failed to connect to Coinbase"
                 return result
@@ -515,9 +632,10 @@ def place_order(
                 if symbol.endswith("USD"):
                     currency = symbol[:-3]
                 else:
-                    result[
-                        "message"
-                    ] = f"Invalid symbol format: {symbol}. Expected format: BTC/USD or BTCUSD"
+                    result["message"] = (
+                        f"Invalid symbol format: {symbol}. "
+                        f"Expected format: BTC/USD or BTCUSD"
+                    )
                     return result
 
             # Convert amount to string for Coinbase API
@@ -586,9 +704,10 @@ def place_order(
             "restricted location" in error_msg
             or "geographical restrictions" in error_msg
         ):
-            result[
-                "message"
-            ] = "Error placing order: Service unavailable due to geographical restrictions. Make sure you're using Binance.US API keys."
+            result["message"] = (
+                "Error placing order: Service unavailable due to geographical restrictions. "
+                "Make sure you're using Binance.US API keys."
+            )
         else:
             result["message"] = f"Error placing order: {error_msg}"
 
@@ -597,13 +716,25 @@ def place_order(
 
 def get_transaction_history(
     exchange_name: str,
-    api_key: str,
-    api_secret: str,
     symbol: str = None,
     limit: int = 50,
+    api_key: str = None,
+    api_secret: str = None,
+    oauth_token: str = None,
 ) -> List[Dict]:
     """
     Get transaction history from the exchange.
+
+    Args:
+        exchange_name: Name of the exchange (e.g., 'binance', 'coinbase')
+        symbol: Trading pair symbol (optional)
+        limit: Maximum number of transactions to return
+        api_key: API key for the exchange (optional if using OAuth)
+        api_secret: API secret for the exchange (optional if using OAuth)
+        oauth_token: OAuth access token for the exchange (optional)
+
+    Returns:
+        List of transaction dictionaries
     """
     result = []
 
@@ -631,9 +762,11 @@ def get_transaction_history(
                             symbol=ticker["symbol"], limit=10
                         )
                         all_trades.extend(symbol_trades)
-                    except:
+                    except Exception as e:
                         # Skip if error for this symbol
-                        pass
+                        logger.debug(
+                            f"Error getting trades for {ticker['symbol']}: {e}"
+                        )
 
                 # Sort by time and limit
                 all_trades.sort(key=lambda x: x["time"], reverse=True)
@@ -655,7 +788,8 @@ def get_transaction_history(
                     }
                 )
         elif exchange_name.lower() == "coinbase":
-            client = get_exchange_client("coinbase", api_key, api_secret)
+            # Use Coinbase client with either API key or OAuth token
+            client = get_exchange_client("coinbase", api_key, api_secret, oauth_token)
             if not client:
                 return result
 
@@ -720,16 +854,18 @@ def get_transaction_history(
                     try:
                         amount_float = float(amount_str)
                         side = "buy" if amount_float > 0 else "sell"
-                    except:
+                    except ValueError:
                         side = "unknown"
+                        logger.debug(f"Unable to parse amount: {amount_str}")
 
                 # Get amount and currency
                 currency = tx.get("currency", "")
                 amount_str = tx.get("amount", {"amount": "0"}).get("amount", "0")
                 try:
                     amount = abs(float(amount_str))
-                except:
+                except ValueError:
                     amount = 0.0
+                    logger.debug(f"Unable to parse amount: {amount_str}")
 
                 # Get price if available
                 native_amount_str = tx.get("native_amount", {"amount": "0"}).get(
@@ -739,9 +875,10 @@ def get_transaction_history(
                     native_amount = abs(float(native_amount_str))
                     # Calculate price as native amount / amount
                     price = native_amount / amount if amount > 0 else 0
-                except:
+                except (ValueError, ZeroDivisionError) as e:
                     price = 0.0
                     native_amount = 0.0
+                    logger.debug(f"Error calculating price: {e}")
 
                 # Format for our standard output
                 result.append(
@@ -782,9 +919,9 @@ def get_transaction_history(
                                     symbol=symbol, limit=10
                                 )
                                 all_trades.extend(symbol_trades)
-                            except:
+                            except Exception as e:
                                 # Skip if error for this symbol
-                                pass
+                                logger.debug(f"Error fetching trades for {symbol}: {e}")
 
                     # Sort by time and limit
                     all_trades.sort(key=lambda x: x["timestamp"], reverse=True)

@@ -1,12 +1,10 @@
 import json
 import os
-import time
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
@@ -201,7 +199,7 @@ def show_stock_analysis():
                     if hist.empty or "Close" not in hist.columns:
                         raise ValueError("No valid price data found")
 
-                except Exception as e:
+                except Exception:
                     # Try alternative ticker formats
                     alternatives = [f"^{ticker}", f"{ticker}-USD", f"{ticker}.N"]
                     success = False
@@ -215,7 +213,7 @@ def show_stock_analysis():
                             if not hist.empty and "Close" in hist.columns:
                                 success = True
                                 break
-                        except:
+                        except Exception:
                             continue
 
                     if not success:
@@ -400,7 +398,7 @@ def show_crypto_analysis():
                         # Verify data
                         if hist.empty or "Close" not in hist.columns:
                             raise ValueError("No data found")
-                except Exception as e:
+                except Exception:
                     # Try alternative formats
                     alternatives = [
                         f"{symbol}USD=X",
@@ -417,7 +415,7 @@ def show_crypto_analysis():
                             if not hist.empty and "Close" in hist.columns:
                                 success = True
                                 break
-                        except:
+                        except Exception:
                             continue
 
                     if not success:
@@ -728,8 +726,7 @@ def show_custom_analysis():
                                 model_name = "Ollama (auto-selected model)"
                         else:
                             # Use the specific model selected by the user
-                            from src.api.ai_analysis import analyze_with_ollama
-
+                            # Import already available from line 14
                             result = analyze_with_ollama(
                                 query, model=specific_model, task_type=task
                             )
@@ -754,7 +751,7 @@ def show_custom_analysis():
 def show_ai_insights():
     """Display the AI Insights page"""
     # Require login
-    user = require_login()
+    require_login()
 
     # Add page title
     st.title("AI-Powered Market Insights")

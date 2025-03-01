@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 from pathlib import Path
@@ -79,12 +78,42 @@ class APIConfigManager:
             return False
 
     @staticmethod
-    def get_api_credentials(service_id: str) -> Tuple[str, str]:
-        """Get API credentials for a service"""
+    def get_api_credentials(
+        service_id: str, user_id=None, key_id=None
+    ) -> Tuple[str, str]:
+        """Get API credentials for a service
+
+        Args:
+            service_id: Service ID to get credentials for
+            user_id: User ID to get credentials for (if using database-stored keys)
+            key_id: Specific API key ID to use (optional)
+
+        Returns:
+            Tuple of (key, secret)
+        """
         config = APIConfigManager.get_api_config_by_service(service_id)
         if not config:
             return "", ""
 
+        # If user_id is provided, try to get from database first
+        if user_id:
+            try:
+                from src.models.database import SessionLocal
+                from src.utils.security import get_api_key
+
+                db = SessionLocal()
+                try:
+                    key, secret, _ = get_api_key(db, user_id, service_id, key_id)
+                    if key:
+                        return key, secret or ""
+                finally:
+                    db.close()
+            except Exception as e:
+                # Fall back to environment variables if database retrieval fails
+                print(f"Error getting API key from database: {str(e)}")
+                pass
+
+        # Fall back to environment variables
         key = APIConfigManager.get_api_value_from_env(config.get("env_var_key", ""))
         secret = APIConfigManager.get_api_value_from_env(
             config.get("env_var_secret", "")
@@ -94,21 +123,46 @@ class APIConfigManager:
 
     @staticmethod
     def test_api_connection(
-        service_id: str, key: str = None, secret: str = None
+        service_id: str,
+        key: str = None,
+        secret: str = None,
+        user_id: int = None,
+        key_id: int = None,
     ) -> Tuple[bool, str]:
-        """Test API connection"""
+        """Test API connection
+
+        Args:
+            service_id: Service ID to test
+            key: API key to use (optional)
+            secret: API secret to use (optional)
+            user_id: User ID to get credentials for (optional)
+            key_id: Specific API key ID to use (optional)
+
+        Returns:
+            Tuple of (success, message)
+        """
         config = APIConfigManager.get_api_config_by_service(service_id)
         if not config:
             return False, f"Unknown service: {service_id}"
 
-        # Use provided credentials or get from environment
-        if key is None and config.get("env_var_key"):
-            key = APIConfigManager.get_api_value_from_env(config.get("env_var_key", ""))
+        # Use provided credentials or get from user's database entry or environment
+        if key is None and secret is None:
+            if user_id:
+                # Try to get user-specific credentials
+                key, secret = APIConfigManager.get_api_credentials(
+                    service_id, user_id, key_id
+                )
+            else:
+                # Fall back to environment variables
+                if config.get("env_var_key"):
+                    key = APIConfigManager.get_api_value_from_env(
+                        config.get("env_var_key", "")
+                    )
 
-        if secret is None and config.get("env_var_secret"):
-            secret = APIConfigManager.get_api_value_from_env(
-                config.get("env_var_secret", "")
-            )
+                if config.get("env_var_secret"):
+                    secret = APIConfigManager.get_api_value_from_env(
+                        config.get("env_var_secret", "")
+                    )
 
         # Check if we need a URL instead of a key
         if config.get("is_url", False):

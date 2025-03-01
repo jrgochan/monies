@@ -3,16 +3,15 @@ AI helper utilities for intelligent model selection and analysis.
 This file provides a unified interface for AI analysis functions.
 """
 
-import os
 import logging
-from typing import Dict, Any, List, Optional, Union
+import os
+from typing import Any, Dict
 
 from src.api.ai_analysis import (
-    analyze_with_openai,
     analyze_with_ollama,
+    analyze_with_openai,
     get_available_ollama_models,
     get_ollama_settings,
-    select_best_ollama_model,
 )
 
 # Setup logging
