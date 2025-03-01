@@ -37,11 +37,11 @@ def cache_analysis(query, result, model_used, expiry_hours=24):
 
         # Convert result to JSON string if it's a dictionary
         result_dict = result if isinstance(result, dict) else {"analysis": result}
-        
+
         # Make sure model_used is saved in the result
         if isinstance(result, dict) and not result.get("model_used") and model_used:
             result_dict["model_used"] = model_used
-            
+
         result_text = json.dumps(result_dict)
 
         if existing:
@@ -157,7 +157,11 @@ def show_stock_analysis():
                 try:
                     if result.get("success", False):
                         cache_analysis(
-                            cache_key, result, result.get("model_used", result.get("data_source", "AI API"))
+                            cache_key,
+                            result,
+                            result.get(
+                                "model_used", result.get("data_source", "AI API")
+                            ),
                         )
                 except Exception as e:
                     st.warning(f"Could not cache result: {str(e)}")
@@ -254,7 +258,11 @@ def show_stock_analysis():
                 st.error(f"Could not display price chart: {str(chart_error)}")
 
             # Display AI analysis
-            model_info = f" (via {result.get('model_used', 'AI')})" if result.get('model_used') else ""
+            model_info = (
+                f" (via {result.get('model_used', 'AI')})"
+                if result.get("model_used")
+                else ""
+            )
             st.subheader(f"AI Analysis{model_info}")
             st.markdown(result["analysis"])
 
@@ -455,7 +463,11 @@ def show_crypto_analysis():
                 st.error(f"Error displaying chart: {str(e)}")
 
             # Display AI analysis
-            model_info = f" (via {result.get('model_used', 'AI')})" if result.get('model_used') else ""
+            model_info = (
+                f" (via {result.get('model_used', 'AI')})"
+                if result.get("model_used")
+                else ""
+            )
             st.subheader(f"AI Analysis{model_info}")
             st.markdown(result["analysis"])
         else:
@@ -503,7 +515,9 @@ def show_etf_recommendations():
                 # Cache the result (ignore errors)
                 try:
                     if result.get("success", False):
-                        cache_analysis(cache_key, result, result.get("model_used", "OpenAI"))
+                        cache_analysis(
+                            cache_key, result, result.get("model_used", "OpenAI")
+                        )
                 except Exception as e:
                     st.warning(f"Could not cache result: {str(e)}")
 
@@ -535,7 +549,11 @@ def show_etf_recommendations():
                 st.dataframe(etf_df, hide_index=True, use_container_width=True)
 
                 # Display AI analysis
-                model_info = f" (via {result.get('model_used', 'AI')})" if result.get('model_used') else ""
+                model_info = (
+                    f" (via {result.get('model_used', 'AI')})"
+                    if result.get("model_used")
+                    else ""
+                )
                 st.subheader(f"Investment Strategy{model_info}")
                 st.markdown(result["analysis"])
 

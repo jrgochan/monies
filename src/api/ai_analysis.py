@@ -35,7 +35,9 @@ except Exception as e:
     # Try without proxies parameter that might be causing the error
     try:
         import os
+
         import openai
+
         openai.api_key = os.getenv("OPENAI_API_KEY", "")
         client = openai.OpenAI()
     except Exception as e2:
@@ -72,7 +74,7 @@ def get_available_ollama_models():
     base_url, _ = get_ollama_settings()
 
     try:
-        response = requests.get(f"{base_url}api/tags")
+        response = requests.get(f"{base_url}api/tags", timeout=10)
         if response.status_code == 200:
             data = response.json()
             if "models" in data:
@@ -217,9 +219,11 @@ def analyze_with_ollama(
         Analysis result as a string
     """
     base_url, default_model = get_ollama_settings()
-    
+
     # Log info for debugging
-    logger.info(f"Ollama analysis request with params: model={model}, task_type={task_type}")
+    logger.info(
+        f"Ollama analysis request with params: model={model}, task_type={task_type}"
+    )
     logger.info(f"Base URL from settings: {base_url}, Default model: {default_model}")
 
     # If no model specified, select the best model for the task
@@ -255,18 +259,20 @@ def analyze_with_ollama(
             "system": system_prompt,  # Some models support system parameter
             "stream": False,
         }
-        
+
         logger.info(f"Making Ollama API request to: {request_url}")
-        logger.info(f"Request body: model={model}, prompt length={len(final_prompt)}, system prompt length={len(system_prompt)}")
-        
+        logger.info(
+            f"Request body: model={model}, prompt length={len(final_prompt)}, system prompt length={len(system_prompt)}"
+        )
+
         response = requests.post(
             request_url,
             json=request_body,
-            timeout=60  # Add a timeout to prevent hanging requests
+            timeout=60,  # Add a timeout to prevent hanging requests
         )
 
         logger.info(f"Ollama API response status: {response.status_code}")
-        
+
         if response.status_code == 200:
             response_json = response.json()
             if "response" in response_json:
@@ -275,7 +281,9 @@ def analyze_with_ollama(
                 logger.error(f"Unexpected Ollama API response format: {response_json}")
                 return "Error: Unexpected API response format"
         elif response.status_code == 404:
-            logger.error(f"Ollama API error 404: Model '{model}' not found or Ollama server not running")
+            logger.error(
+                f"Ollama API error 404: Model '{model}' not found or Ollama server not running"
+            )
             return f"Error: Model '{model}' not found or Ollama server not running. Please check your Ollama installation."
         else:
             logger.error(f"Ollama API error: {response.status_code} - {response.text}")
@@ -284,11 +292,11 @@ def analyze_with_ollama(
     except requests.exceptions.Timeout:
         logger.error("Ollama API request timed out after 60 seconds")
         return "Error: Request to Ollama server timed out. The server may be busy or not responding."
-        
+
     except requests.exceptions.ConnectionError as ce:
         logger.error(f"Connection error to Ollama API: {str(ce)}")
         return "Error: Could not connect to Ollama server. Please ensure the server is running and accessible."
-        
+
     except Exception as e:
         logger.error(f"Error with Ollama analysis: {str(e)}")
         return f"Error: {str(e)}"
@@ -313,7 +321,7 @@ def get_alpha_vantage_data(
     try:
         # Get daily time series data
         url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&outputsize=full&apikey={alpha_vantage_key}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=15)  # 15 second timeout for API request
 
         if response.status_code != 200:
             logger.error(
@@ -369,7 +377,7 @@ def get_alpha_vantage_data(
 
         # Get company overview
         overview_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={ticker}&apikey={alpha_vantage_key}"
-        overview_response = requests.get(overview_url)
+        overview_response = requests.get(overview_url, timeout=15)  # 15 second timeout
         company_info = {}
 
         if overview_response.status_code == 200:
@@ -417,7 +425,7 @@ def get_financial_modeling_prep_data(
 
         # Get historical price data
         url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?from={start_date}&apikey={fmp_api_key}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=15)  # 15 second timeout
 
         if response.status_code != 200:
             logger.error(f"FMP API returned status code {response.status_code}")
@@ -449,7 +457,7 @@ def get_financial_modeling_prep_data(
 
         # Get company profile
         profile_url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={fmp_api_key}"
-        profile_response = requests.get(profile_url)
+        profile_response = requests.get(profile_url, timeout=15)  # 15 second timeout
         company_info = {}
 
         if profile_response.status_code == 200:
@@ -491,8 +499,8 @@ def get_yahoo_finance_data(
                     try:
                         stock = yf.Ticker(ticker)
                         info = stock.info
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Non-critical info retrieval error: {str(e)}")
                     break
 
                 # If we got an empty DataFrame, try using Ticker method
@@ -720,8 +728,8 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                                 }
                                 for item in news[:3]  # Just take the top 3 news
                             ]
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Non-critical news retrieval error: {str(e)}")
 
                     source_result["success"] = True
                     return source_result
@@ -801,7 +809,9 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                             )
                             # Get user's preferred model from settings
                             _, configured_model = get_ollama_settings()
-                            result["analysis"] = analyze_with_ollama(prompt, model=configured_model)
+                            result["analysis"] = analyze_with_ollama(
+                                prompt, model=configured_model
+                            )
                             result["model_used"] = f"Ollama ({configured_model})"
                     except Exception as e:
                         logger.error(f"Error generating analysis: {str(e)}")
@@ -851,7 +861,9 @@ def analyze_stock_trend(ticker: str, period: str = "6mo", user_id: int = None) -
                             )
                             # Get user's preferred model from settings
                             _, configured_model = get_ollama_settings()
-                            result["analysis"] = analyze_with_ollama(prompt, model=configured_model)
+                            result["analysis"] = analyze_with_ollama(
+                                prompt, model=configured_model
+                            )
                             result["model_used"] = f"Ollama ({configured_model})"
                     except Exception as e:
                         logger.error(f"Error generating analysis: {str(e)}")
@@ -1124,7 +1136,7 @@ def analyze_crypto_trend(symbol: str, days: int = 180) -> Dict:
             current_price = None
             try:
                 api_url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
-                response = requests.get(api_url, timeout=5)
+                response = requests.get(api_url, timeout=10)  # 10 second timeout
                 if response.status_code == 200:
                     data = response.json()
                     if symbol.lower() in data and "usd" in data[symbol.lower()]:
@@ -1403,7 +1415,8 @@ def get_etf_recommendations(
                         prompt, model=configured_model, task_type="finance"
                     )
                     result["model_used"] = f"Ollama ({configured_model})"
-                except:
+                except Exception as ollama_error:
+                    logger.warning(f"ETF analysis with Ollama failed: {str(ollama_error)}")
                     result[
                         "analysis"
                     ] = f"These ETFs are tailored for {risk_profile} investors, providing a balanced approach to market exposure. Consider individual research before investing."
@@ -1452,44 +1465,52 @@ def analyze_with_best_model(
             # Get user's preferred model from settings
             _, configured_model = get_ollama_settings()
             logger.info(f"Trying user-configured model: {configured_model}")
-            
-            result = analyze_with_ollama(prompt, model=configured_model, task_type=task_type)
-            
+
+            result = analyze_with_ollama(
+                prompt, model=configured_model, task_type=task_type
+            )
+
             # Check if the result indicates a 404 error (model not found)
             if "Error: 404" in result or "Error: Model" in result:
                 # If 404, try one more time with most basic model (llama2)
-                logger.warning(f"Model {configured_model} not found, falling back to basic model")
+                logger.warning(
+                    f"Model {configured_model} not found, falling back to basic model"
+                )
                 raise ValueError(f"Model {configured_model} not found: {result}")
-                
+
             return result
-            
+
         except Exception as e2:
-            logger.warning(f"First Ollama attempt failed: {str(e2)}, trying fallback model")
-            
+            logger.warning(
+                f"First Ollama attempt failed: {str(e2)}, trying fallback model"
+            )
+
             # Try a final time with a simple, common model that should exist
             try:
                 fallback_models = ["llama2", "mistral", "gemma:2b"]
-                
+
                 for fallback_model in fallback_models:
                     try:
                         logger.info(f"Trying fallback model: {fallback_model}")
-                        return analyze_with_ollama(prompt, model=fallback_model, task_type=task_type)
+                        return analyze_with_ollama(
+                            prompt, model=fallback_model, task_type=task_type
+                        )
                     except Exception as model_error:
-                        logger.warning(f"Fallback model {fallback_model} failed: {str(model_error)}")
+                        logger.warning(
+                            f"Fallback model {fallback_model} failed: {str(model_error)}"
+                        )
                         continue
-                        
+
                 # If all models failed, raise the error to trigger the fallback message
                 raise ValueError("All Ollama models failed")
-                
+
             except Exception as e3:
                 logger.error(f"All AI analysis methods and fallbacks failed: {str(e3)}")
 
                 # Use fallback message or generate a generic one
                 if fallback_message:
                     return fallback_message
-                return (
-                    "Analysis could not be generated at this time. Please try again later."
-                )
+                return "Analysis could not be generated at this time. Please try again later."
 
 
 def generate_generic_analysis(prompt: str) -> str:

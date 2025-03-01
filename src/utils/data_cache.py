@@ -160,18 +160,24 @@ class MarketDataCache:
                         # Get the name of the index column (usually 'date' or 'Date' or 'index')
                         date_col = data_reset.columns[0]
                         # Convert datetime objects to strings
-                        data_reset[date_col] = data_reset[date_col].dt.strftime("%Y-%m-%d")
+                        data_reset[date_col] = data_reset[date_col].dt.strftime(
+                            "%Y-%m-%d"
+                        )
                         # Convert to dict
                         data_dict = {"prices": data_reset.to_dict(orient="records")}
                     except Exception as e:
-                        logger.error(f"Error processing DataFrame with DatetimeIndex: {str(e)}")
+                        logger.error(
+                            f"Error processing DataFrame with DatetimeIndex: {str(e)}"
+                        )
                         # Fallback: convert to a simpler format with string dates
                         try:
                             simple_df = data.copy()
                             simple_df.index = simple_df.index.strftime("%Y-%m-%d")
                             data_dict = {"prices": simple_df.to_dict()}
                         except Exception as e2:
-                            logger.error(f"Fallback serialization also failed: {str(e2)}")
+                            logger.error(
+                                f"Fallback serialization also failed: {str(e2)}"
+                            )
                             # Last resort: convert to a very simple format
                             data_dict = {"prices": data.reset_index().to_dict()}
                 else:

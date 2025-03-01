@@ -81,20 +81,22 @@ class PortfolioOptimizer:
             # Try multiple data sources in sequence
             # 1. First try Yahoo Finance
             try:
-                logger.info(f"Fetching live data for {symbol} from Yahoo Finance ({actual_period})")
+                logger.info(
+                    f"Fetching live data for {symbol} from Yahoo Finance ({actual_period})"
+                )
                 df = yf.download(
                     symbol, period=actual_period, progress=False, interval="1d"
                 )
                 # Check if DataFrame is empty safely
                 df_empty = True
                 if isinstance(df, pd.DataFrame):
-                    df_empty = df.empty if hasattr(df, 'empty') else True
-                
+                    df_empty = df.empty if hasattr(df, "empty") else True
+
                 # Check row count safely
                 df_len = 0
                 if isinstance(df, pd.DataFrame):
                     df_len = len(df)
-                    
+
                 if df_empty or df_len < 5:
                     raise ValueError("Not enough data returned from Yahoo Finance")
 
@@ -102,9 +104,11 @@ class PortfolioOptimizer:
                 if use_cache:
                     # Create a serializable DataFrame
                     serializable_df = df.reset_index()
-                    serializable_df["Date"] = serializable_df["Date"].dt.strftime("%Y-%m-%d")
+                    serializable_df["Date"] = serializable_df["Date"].dt.strftime(
+                        "%Y-%m-%d"
+                    )
                     serializable_df = serializable_df.set_index("Date")
-                    
+
                     success = MarketDataCache.cache_data(
                         db=db,
                         symbol=symbol,
@@ -115,48 +119,60 @@ class PortfolioOptimizer:
                         cache_duration_hours=cache_duration_hours,
                     )
                     if success:
-                        logger.info(f"Updated cache with fresh data for {symbol} from Yahoo Finance")
+                        logger.info(
+                            f"Updated cache with fresh data for {symbol} from Yahoo Finance"
+                        )
                     else:
-                        logger.warning(f"Failed to cache Yahoo Finance data for {symbol}")
+                        logger.warning(
+                            f"Failed to cache Yahoo Finance data for {symbol}"
+                        )
 
                 # Return just the close prices
                 return df["Close"]
-            
+
             # 2. Try Alpha Vantage if available (more reliable but rate-limited)
             except Exception as yahoo_error:
-                logger.warning(f"Yahoo Finance data retrieval failed for {symbol}: {str(yahoo_error)}")
-                
+                logger.warning(
+                    f"Yahoo Finance data retrieval failed for {symbol}: {str(yahoo_error)}"
+                )
+
                 if ALPHA_VANTAGE_KEY:
                     try:
                         logger.info(f"Trying Alpha Vantage API for {symbol}")
                         # Convert lookback period to Alpha Vantage format
-                        if lookback_period in ['1d', '5d']:
-                            outputsize = 'compact'  # last 100 data points
+                        if lookback_period in ["1d", "5d"]:
+                            outputsize = "compact"  # last 100 data points
                         else:
-                            outputsize = 'full'     # up to 20 years of data
-                            
+                            outputsize = "full"  # up to 20 years of data
+
                         # Build Alpha Vantage API request
                         url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={symbol}&outputsize={outputsize}&apikey={ALPHA_VANTAGE_KEY}"
                         response = requests.get(url)
-                        
+
                         if response.status_code != 200:
-                            raise ValueError(f"Alpha Vantage API returned status code {response.status_code}")
-                        
+                            raise ValueError(
+                                f"Alpha Vantage API returned status code {response.status_code}"
+                            )
+
                         data = response.json()
-                        
+
                         # Check for error messages
                         if "Error Message" in data:
-                            raise ValueError(f"Alpha Vantage API error: {data['Error Message']}")
-                            
+                            raise ValueError(
+                                f"Alpha Vantage API error: {data['Error Message']}"
+                            )
+
                         if "Time Series (Daily)" not in data:
-                            raise ValueError("No time series data found in Alpha Vantage response")
-                        
+                            raise ValueError(
+                                "No time series data found in Alpha Vantage response"
+                            )
+
                         # Convert to DataFrame
                         time_series = data["Time Series (Daily)"]
                         alpha_df = pd.DataFrame(time_series).T
                         alpha_df.index = pd.to_datetime(alpha_df.index)
                         alpha_df = alpha_df.sort_index()
-                        
+
                         # Rename columns to match yfinance format
                         alpha_df.columns = [col for col in alpha_df.columns]
                         alpha_df = alpha_df.rename(
@@ -169,19 +185,23 @@ class PortfolioOptimizer:
                                 "6. volume": "Volume",
                             }
                         )
-                        
+
                         # Convert columns to numeric
                         for col in alpha_df.columns:
                             alpha_df[col] = pd.to_numeric(alpha_df[col])
-                        
+
                         # Filter based on period if needed
-                        days = PortfolioOptimizer.convert_period_to_days(lookback_period)
+                        days = PortfolioOptimizer.convert_period_to_days(
+                            lookback_period
+                        )
                         start_date = datetime.now() - timedelta(days=days)
                         alpha_df = alpha_df[alpha_df.index >= start_date]
-                        
+
                         if alpha_df.empty or len(alpha_df) < 5:
-                            raise ValueError("Not enough data returned from Alpha Vantage after filtering")
-                        
+                            raise ValueError(
+                                "Not enough data returned from Alpha Vantage after filtering"
+                            )
+
                         # Cache the data
                         if use_cache:
                             MarketDataCache.cache_data(
@@ -191,10 +211,12 @@ class PortfolioOptimizer:
                                 time_period=lookback_period,
                                 data=alpha_df,
                                 data_source="alpha_vantage",
-                                cache_duration_hours=cache_duration_hours
+                                cache_duration_hours=cache_duration_hours,
                             )
-                            logger.info(f"Updated cache with fresh data for {symbol} from Alpha Vantage")
-                        
+                            logger.info(
+                                f"Updated cache with fresh data for {symbol} from Alpha Vantage"
+                            )
+
                         # Return the adjusted close prices
                         if "Adj Close" in alpha_df.columns:
                             return alpha_df["Adj Close"]
@@ -203,9 +225,11 @@ class PortfolioOptimizer:
                         else:
                             # Return the first numeric column
                             return alpha_df.iloc[:, 0]
-                            
+
                     except Exception as alpha_error:
-                        logger.warning(f"Alpha Vantage data retrieval failed for {symbol}: {str(alpha_error)}")
+                        logger.warning(
+                            f"Alpha Vantage data retrieval failed for {symbol}: {str(alpha_error)}"
+                        )
                         # Continue to the next attempt
 
             except Exception as e1:
@@ -230,7 +254,9 @@ class PortfolioOptimizer:
                     )
 
                     if df.empty or len(df) < 5:
-                        raise ValueError("Not enough data returned from Yahoo Finance on second attempt")
+                        raise ValueError(
+                            "Not enough data returned from Yahoo Finance on second attempt"
+                        )
 
                     # Cache the data if it was successfully fetched
                     if use_cache:
@@ -258,36 +284,38 @@ class PortfolioOptimizer:
                     try:
                         # Try FMP API (Financial Modeling Prep - has a free tier)
                         logger.info(f"Trying FMP API for {symbol}")
-                        
+
                         # Convert lookback period to days
                         days = PortfolioOptimizer.convert_period_to_days(actual_period)
                         end_date = datetime.now()
                         start_date = end_date - timedelta(days=days)
-                        
+
                         # Format dates for FMP API
                         start_str = start_date.strftime("%Y-%m-%d")
                         end_str = end_date.strftime("%Y-%m-%d")
-                        
+
                         # Free tier of FMP
                         url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{symbol}?from={start_str}&to={end_str}"
-                        
+
                         response = requests.get(url)
                         if response.status_code != 200:
-                            raise ValueError(f"FMP API returned status code {response.status_code}")
-                            
+                            raise ValueError(
+                                f"FMP API returned status code {response.status_code}"
+                            )
+
                         data = response.json()
-                        
+
                         if "historical" not in data:
                             raise ValueError("No historical data found in FMP response")
-                            
+
                         # Convert to DataFrame
                         fmp_df = pd.DataFrame(data["historical"])
-                        
+
                         # Format dates and set index
                         fmp_df["date"] = pd.to_datetime(fmp_df["date"])
                         fmp_df = fmp_df.set_index("date")
                         fmp_df = fmp_df.sort_index()
-                        
+
                         # Rename columns to match yfinance format
                         fmp_df = fmp_df.rename(
                             columns={
@@ -295,13 +323,13 @@ class PortfolioOptimizer:
                                 "high": "High",
                                 "low": "Low",
                                 "close": "Close",
-                                "volume": "Volume"
+                                "volume": "Volume",
                             }
                         )
-                        
+
                         if fmp_df.empty or len(fmp_df) < 5:
                             raise ValueError("Not enough data returned from FMP API")
-                            
+
                         # Cache the data
                         if use_cache:
                             MarketDataCache.cache_data(
@@ -311,16 +339,20 @@ class PortfolioOptimizer:
                                 time_period=lookback_period,
                                 data=fmp_df,
                                 data_source="fmp",
-                                cache_duration_hours=cache_duration_hours
+                                cache_duration_hours=cache_duration_hours,
                             )
-                            logger.info(f"Updated cache with fresh data for {symbol} from FMP")
-                            
+                            logger.info(
+                                f"Updated cache with fresh data for {symbol} from FMP"
+                            )
+
                         # Return close prices
                         return fmp_df["Close"]
-                        
+
                     except Exception as fmp_error:
-                        logger.warning(f"FMP API data retrieval failed for {symbol}: {str(fmp_error)}")
-                        
+                        logger.warning(
+                            f"FMP API data retrieval failed for {symbol}: {str(fmp_error)}"
+                        )
+
                         # Now try to use cached data if available and we prefer live data
                         if use_cache and prefer_live_data and cached_data is None:
                             logger.info(
@@ -331,7 +363,9 @@ class PortfolioOptimizer:
                             )
 
                             if cached_data is not None:
-                                logger.info(f"Using cached data for {symbol} as fallback")
+                                logger.info(
+                                    f"Using cached data for {symbol} as fallback"
+                                )
                                 if "Close" in cached_data.columns:
                                     return cached_data["Close"]
                                 else:
@@ -533,13 +567,16 @@ class PortfolioOptimizer:
                     else:
                         try:
                             # Try to get days difference from datetime index
-                            if hasattr(series.index[-1], 'days') and hasattr(series.index[0], 'days'):
+                            if hasattr(series.index[-1], "days") and hasattr(
+                                series.index[0], "days"
+                            ):
                                 days = (series.index[-1] - series.index[0]).days
                             else:
                                 # Handle case where index is string dates or integers
                                 try:
                                     # Convert string dates to datetime if needed
                                     from datetime import datetime
+
                                     start_date = pd.to_datetime(series.index[0])
                                     end_date = pd.to_datetime(series.index[-1])
                                     days = (end_date - start_date).days
@@ -547,7 +584,7 @@ class PortfolioOptimizer:
                                     # If conversion fails, estimate based on length of series
                                     # Assume daily data
                                     days = len(series)
-                            
+
                             if days > 0:
                                 annualized_return = (
                                     (1 + total_return / 100) ** (365 / days)
@@ -555,7 +592,9 @@ class PortfolioOptimizer:
                             else:
                                 annualized_return = 0
                         except Exception as e:
-                            logger.warning(f"Error calculating annualized return: {str(e)}")
+                            logger.warning(
+                                f"Error calculating annualized return: {str(e)}"
+                            )
                             # Fallback - use simple estimate
                             annualized_return = total_return / 100
 
@@ -571,7 +610,9 @@ class PortfolioOptimizer:
                         if len(cumulative) > 0:
                             cummax = cumulative.cummax()
                             # Check if all values in cummax are greater than 0
-                            if cummax.gt(0).all():  # Explicit comparison instead of cummax > 0
+                            if cummax.gt(
+                                0
+                            ).all():  # Explicit comparison instead of cummax > 0
                                 drawdowns = cumulative / cummax - 1
                                 max_dd = drawdowns.min() * 100
                             else:
@@ -649,13 +690,19 @@ class PortfolioOptimizer:
                 # Calculate annualized return
                 try:
                     # Try to get days difference from datetime index
-                    if hasattr(portfolio_performance.index[-1], 'days') and hasattr(portfolio_performance.index[0], 'days'):
-                        days = (portfolio_performance.index[-1] - portfolio_performance.index[0]).days
+                    if hasattr(portfolio_performance.index[-1], "days") and hasattr(
+                        portfolio_performance.index[0], "days"
+                    ):
+                        days = (
+                            portfolio_performance.index[-1]
+                            - portfolio_performance.index[0]
+                        ).days
                     else:
                         # Handle case where index is string dates or integers
                         try:
                             # Convert string dates to datetime if needed
                             from datetime import datetime
+
                             start_date = pd.to_datetime(portfolio_performance.index[0])
                             end_date = pd.to_datetime(portfolio_performance.index[-1])
                             days = (end_date - start_date).days
@@ -663,13 +710,17 @@ class PortfolioOptimizer:
                             # If conversion fails, estimate based on length of series
                             # Assume daily data
                             days = len(portfolio_performance)
-                    
+
                     if days > 0:
-                        annualized_return = ((1 + total_return / 100) ** (365 / days)) - 1
+                        annualized_return = (
+                            (1 + total_return / 100) ** (365 / days)
+                        ) - 1
                     else:
                         annualized_return = 0
                 except Exception as e:
-                    logger.warning(f"Error calculating portfolio annualized return: {str(e)}")
+                    logger.warning(
+                        f"Error calculating portfolio annualized return: {str(e)}"
+                    )
                     # Fallback - use simple estimate
                     annualized_return = total_return / 100
 
@@ -679,7 +730,9 @@ class PortfolioOptimizer:
                 # Calculate max drawdown
                 cumulative = (1 + portfolio_returns).cumprod()
                 cummax = cumulative.cummax()
-                if cummax.gt(0).all():  # Using explicit comparison instead of (cummax > 0)
+                if cummax.gt(
+                    0
+                ).all():  # Using explicit comparison instead of (cummax > 0)
                     drawdowns = cumulative / cummax - 1
                     max_dd = drawdowns.min() * 100
                 else:
@@ -745,7 +798,7 @@ class PortfolioOptimizer:
 
         # Find common dates among all ETFs
         all_date_sets = [set(s.index) for s in etfs_data.values()]
-        
+
         # Check if we have any date sets before attempting intersection
         if all_date_sets:
             common_dates = sorted(set.intersection(*all_date_sets))
@@ -979,14 +1032,18 @@ class PortfolioOptimizer:
 
             # Calculate portfolio performance with error handling
             try:
-                portfolio_performance = PortfolioOptimizer.calculate_portfolio_performance(
-                    etfs_data=etfs_data, weights=weights
+                portfolio_performance = (
+                    PortfolioOptimizer.calculate_portfolio_performance(
+                        etfs_data=etfs_data, weights=weights
+                    )
                 )
             except Exception as e:
                 logger.error(f"Error calculating portfolio performance: {str(e)}")
                 # Create a simple placeholder performance series
                 dates = pd.date_range(end=datetime.now(), periods=100, freq="D")
-                portfolio_performance = pd.Series(np.linspace(1, 1.2, len(dates)), index=dates)
+                portfolio_performance = pd.Series(
+                    np.linspace(1, 1.2, len(dates)), index=dates
+                )
 
             # Calculate performance metrics with error handling
             try:
@@ -1007,10 +1064,10 @@ class PortfolioOptimizer:
                         "annualized_return_fmt": "N/A",
                         "volatility_fmt": "N/A",
                         "max_drawdown_fmt": "N/A",
-                        "sharpe_ratio_fmt": "N/A"
+                        "sharpe_ratio_fmt": "N/A",
                     }
                 }
-                
+
                 # Add placeholder metrics for each ETF
                 for etf in etfs_data.keys():
                     metrics[etf] = {
@@ -1023,7 +1080,7 @@ class PortfolioOptimizer:
                         "annualized_return_fmt": "N/A",
                         "volatility_fmt": "N/A",
                         "max_drawdown_fmt": "N/A",
-                        "sharpe_ratio_fmt": "N/A"
+                        "sharpe_ratio_fmt": "N/A",
                     }
 
             # Format weights as percentages for display

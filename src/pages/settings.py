@@ -364,58 +364,65 @@ def show_preferences(user_id):
 
     # Theme preference
     theme = st.radio("Theme", options=["Light", "Dark", "System"], horizontal=True)
-    
+
     # AI model preferences
     st.subheader("AI Model Preferences")
-    
+
     # Get available Ollama models
     from src.api.ai_analysis import get_available_ollama_models
-    
+
     ollama_models = get_available_ollama_models()
-    
+
     # Get current default model
     from src.api.ai_analysis import get_ollama_settings
+
     _, current_model = get_ollama_settings()
-    
+
     if not ollama_models:
-        st.warning("Could not connect to Ollama server to retrieve models. Please check your connection settings.")
+        st.warning(
+            "Could not connect to Ollama server to retrieve models. Please check your connection settings."
+        )
         st.info("You can configure Ollama server in the API Connections tab.")
-        
+
         # Allow setting the model name even if Ollama is not connected
         # This helps for cases where Ollama might be available later
         custom_model = st.text_input(
             "Custom Ollama Model Name",
             value=current_model,
-            help="Enter the name of the Ollama model to use. Note: Since Ollama server is not connected, we can't verify if this model exists."
+            help="Enter the name of the Ollama model to use. Note: Since Ollama server is not connected, we can't verify if this model exists.",
         )
-        
+
         # Save button for AI model settings
         if st.button("Save Custom Model Preference"):
             from src.utils.api_config import APIConfigManager
-            
+
             success, message = APIConfigManager.save_api_credentials(
                 "ollama",
                 os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
                 None,
-                model_preference=custom_model
+                model_preference=custom_model,
             )
-            
+
             if success:
                 st.success(f"Default AI model set to {custom_model}")
-                st.info("Note: Since Ollama is not connected, we can't verify if this model exists. The model will be used when Ollama becomes available.")
+                st.info(
+                    "Note: Since Ollama is not connected, we can't verify if this model exists. The model will be used when Ollama becomes available."
+                )
                 # Update environment variable for immediate use
                 os.environ["OLLAMA_MODEL"] = custom_model
             else:
                 st.error(f"Failed to update AI model preference: {message}")
-        
+
         # Show some common model names as suggestions
         st.info("Common model names: llama2, mistral, gemma:2b, llama3, llama3:8b")
     else:
         # Display model selection dropdown
         with st.expander("Available Models", expanded=True):
             # Create a more informative display of available models
-            st.write(f"Found {len(ollama_models)} models available on your Ollama server:")
-            
+            st.write(
+                f"Found {len(ollama_models)} models available on your Ollama server:"
+            )
+
             # Group models by type for better organization
             model_groups = {}
             for model in ollama_models:
@@ -424,7 +431,7 @@ def show_preferences(user_id):
                 if base_name not in model_groups:
                     model_groups[base_name] = []
                 model_groups[base_name].append(model)
-            
+
             # Display grouped models
             cols = st.columns(3)
             col_idx = 0
@@ -434,34 +441,36 @@ def show_preferences(user_id):
                     for variant in variants:
                         st.write(f"- {variant}")
                 col_idx = (col_idx + 1) % 3
-        
+
         # Display model selection dropdown
         selected_model = st.selectbox(
-            "Default AI Model for Analysis", 
+            "Default AI Model for Analysis",
             options=ollama_models,
-            index=ollama_models.index(current_model) if current_model in ollama_models else 0,
-            help="Select the default model to use for market analysis. This model will be used when generating AI insights."
+            index=ollama_models.index(current_model)
+            if current_model in ollama_models
+            else 0,
+            help="Select the default model to use for market analysis. This model will be used when generating AI insights.",
         )
-        
+
         # Save button for AI model settings
         if st.button("Save AI Model Preference"):
             # Save the selected model to environment variable
             from src.utils.api_config import APIConfigManager
-            
+
             success, message = APIConfigManager.save_api_credentials(
                 "ollama",
                 os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
                 None,
-                model_preference=selected_model
+                model_preference=selected_model,
             )
-            
+
             if success:
                 st.success(f"Default AI model set to {selected_model}")
                 # Update environment variable for immediate use
                 os.environ["OLLAMA_MODEL"] = selected_model
             else:
                 st.error(f"Failed to update AI model preference: {message}")
-    
+
     # Data source preferences section
     st.subheader("Data Source Preferences")
     st.info(

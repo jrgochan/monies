@@ -19,7 +19,20 @@ from src.utils.auth import require_login
 from src.utils.portfolio_optimizer import PortfolioOptimizer
 
 # Make the lookback periods globally accessible
-LOOKBACK_PERIODS = ["1mo", "3mo", "6mo", "1y", "2y", "3y", "5y", "10y", "15y", "20y", "25y", "max"]
+LOOKBACK_PERIODS = [
+    "1mo",
+    "3mo",
+    "6mo",
+    "1y",
+    "2y",
+    "3y",
+    "5y",
+    "10y",
+    "15y",
+    "20y",
+    "25y",
+    "max",
+]
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -182,7 +195,7 @@ def show_etf_optimizer():
                     # Fallback to basic prompt
                     prompt = f"""
                     Analyze a portfolio of {base_etf} and related ETFs optimized using {optimization_method}.
-                    
+
                     Due to data availability issues, only limited metrics could be calculated.
                     Discuss general principles of leveraged ETF portfolio optimization and potential risks.
                     """
@@ -217,26 +230,40 @@ def show_etf_optimizer():
                 with st.spinner("Generating performance comparison..."):
                     try:
                         # Add more explicit checks to avoid Series truth value errors
-                        has_portfolio_perf = "portfolio_performance" in optimization_result
+                        has_portfolio_perf = (
+                            "portfolio_performance" in optimization_result
+                        )
                         has_etfs_data = "etfs_data" in optimization_result
                         has_valid_etfs_data = False
-                        
+
                         if has_etfs_data:
                             # Check if etfs_data is not empty dict
-                            has_valid_etfs_data = len(optimization_result["etfs_data"]) > 0
-                        
+                            has_valid_etfs_data = (
+                                len(optimization_result["etfs_data"]) > 0
+                            )
+
                         if has_portfolio_perf and has_etfs_data and has_valid_etfs_data:
                             try:
                                 display_portfolio_results(
                                     optimization_result=optimization_result
                                 )
                             except Exception as inner_e:
-                                logger.error(f"Error in display_portfolio_results: {str(inner_e)}")
-                                st.warning("Could not display performance charts due to data format issues.")
-                                st.info("The optimization was successful, but visualization failed.")
+                                logger.error(
+                                    f"Error in display_portfolio_results: {str(inner_e)}"
+                                )
+                                st.warning(
+                                    "Could not display performance charts due to data format issues."
+                                )
+                                st.info(
+                                    "The optimization was successful, but visualization failed."
+                                )
                         else:
-                            st.warning("Limited data available. Could not generate full performance comparison charts.")
-                            st.info("The analysis is based on the available data. For better results, try again later or select different ETFs.")
+                            st.warning(
+                                "Limited data available. Could not generate full performance comparison charts."
+                            )
+                            st.info(
+                                "The analysis is based on the available data. For better results, try again later or select different ETFs."
+                            )
                     except Exception as e:
                         logger.error(f"Error displaying results: {str(e)}")
                         st.warning("Could not display portfolio performance charts.")
@@ -553,11 +580,11 @@ def display_portfolio_results(optimization_result: Dict):
     if not isinstance(etfs_data, dict) or len(etfs_data) == 0:
         st.warning("No ETF data available for visualization.")
         return
-        
+
     if not isinstance(weights, dict) or len(weights) == 0:
         st.warning("No weight data available for visualization.")
         return
-        
+
     if portfolio_performance is None:
         st.warning("No portfolio performance data available for visualization.")
         # We can continue with just ETF data
@@ -565,25 +592,27 @@ def display_portfolio_results(optimization_result: Dict):
     st.subheader("Performance Comparison")
 
     # Initialize session state for chart lookback if not present
-    if 'chart_lookback' not in st.session_state:
+    if "chart_lookback" not in st.session_state:
         st.session_state.chart_lookback = lookback_period
-        
+
     # Allow user to select a different lookback period for visualization
     def update_chart_period():
         # This function just updates the session state
         pass
-        
+
     new_lookback = st.select_slider(
         "Chart Lookback Period",
         options=LOOKBACK_PERIODS,
         value=st.session_state.chart_lookback,
         key="chart_lookback_selector",
-        on_change=update_chart_period
+        on_change=update_chart_period,
     )
-    
+
     if new_lookback != lookback_period:
-        st.info(f"Viewing data with {new_lookback} lookback. To recalculate optimization with this period, please return to the main form and adjust the setting there.")
-    
+        st.info(
+            f"Viewing data with {new_lookback} lookback. To recalculate optimization with this period, please return to the main form and adjust the setting there."
+        )
+
     # Display the weights in an expander
     with st.expander("Optimal Portfolio Weights"):
         weights_df = pd.DataFrame(
@@ -599,7 +628,7 @@ def display_portfolio_results(optimization_result: Dict):
         try:
             # Create database session
             db = SessionLocal()
-            
+
             # Fetch historical data for each ETF with the new lookback period
             new_etfs_data = {}
             for symbol in etfs_data.keys():
@@ -610,34 +639,42 @@ def display_portfolio_results(optimization_result: Dict):
                         symbol=symbol,
                         lookback_period=new_lookback,
                         use_cache=True,
-                        prefer_live_data=False  # Use cached data first
+                        prefer_live_data=False,  # Use cached data first
                     )
                     new_etfs_data[symbol] = price_series
                 except Exception as e:
-                    st.warning(f"Could not load {new_lookback} data for {symbol}: {str(e)}")
-            
+                    st.warning(
+                        f"Could not load {new_lookback} data for {symbol}: {str(e)}"
+                    )
+
             # If we got data, use it
             if new_etfs_data:
                 etfs_data = new_etfs_data
-                
+
                 # Calculate portfolio performance with the new data
-                new_portfolio_performance = PortfolioOptimizer.calculate_portfolio_performance(
-                    etfs_data=new_etfs_data, weights=weights
+                new_portfolio_performance = (
+                    PortfolioOptimizer.calculate_portfolio_performance(
+                        etfs_data=new_etfs_data, weights=weights
+                    )
                 )
                 portfolio_performance = new_portfolio_performance
             else:
-                st.warning(f"Could not load {new_lookback} data for any ETFs. Using original data.")
+                st.warning(
+                    f"Could not load {new_lookback} data for any ETFs. Using original data."
+                )
                 portfolio_performance = optimization_result.get("portfolio_performance")
-                
+
             # Close the database session
             db.close()
         except Exception as e:
-            st.warning(f"Error loading {new_lookback} data: {str(e)}. Using original data.")
+            st.warning(
+                f"Error loading {new_lookback} data: {str(e)}. Using original data."
+            )
             portfolio_performance = optimization_result.get("portfolio_performance")
     else:
         # Use the portfolio performance directly from the optimization result
         portfolio_performance = optimization_result.get("portfolio_performance")
-    
+
     # Create normalized performance data for plotting
     normalized_data = {}
     for symbol, series in etfs_data.items():
@@ -654,8 +691,10 @@ def display_portfolio_results(optimization_result: Dict):
                             datetime_index = pd.to_datetime(series.index)
                             series = pd.Series(series.values, index=datetime_index)
                         except Exception as date_error:
-                            logger.warning(f"Error converting {symbol} dates: {str(date_error)}")
-                    
+                            logger.warning(
+                                f"Error converting {symbol} dates: {str(date_error)}"
+                            )
+
                     normalized_data[symbol] = series / first_value
             except Exception as e:
                 logger.warning(f"Error normalizing {symbol} data: {str(e)}")
@@ -671,13 +710,16 @@ def display_portfolio_results(optimization_result: Dict):
                         # Convert index to datetime if it's not already
                         datetime_index = pd.to_datetime(portfolio_performance.index)
                         portfolio_performance = pd.Series(
-                            portfolio_performance.values, 
-                            index=datetime_index
+                            portfolio_performance.values, index=datetime_index
                         )
                     except Exception as date_error:
-                        logger.warning(f"Error converting portfolio performance dates: {str(date_error)}")
-                
-                normalized_data["Optimal Portfolio"] = portfolio_performance / first_value
+                        logger.warning(
+                            f"Error converting portfolio performance dates: {str(date_error)}"
+                        )
+
+                normalized_data["Optimal Portfolio"] = (
+                    portfolio_performance / first_value
+                )
         except Exception as e:
             logger.warning(f"Error normalizing portfolio performance: {str(e)}")
 
@@ -685,9 +727,9 @@ def display_portfolio_results(optimization_result: Dict):
     plot_data = pd.DataFrame(normalized_data)
 
     # Initialize chart tab selection in session state
-    if 'chart_tab_index' not in st.session_state:
+    if "chart_tab_index" not in st.session_state:
         st.session_state.chart_tab_index = 0
-        
+
     # Create tabs for different visualization options
     chart_tab_names = ["Interactive Chart", "Performance Metrics", "Comparison Table"]
     chart_tabs = st.tabs(chart_tab_names)
@@ -699,36 +741,40 @@ def display_portfolio_results(optimization_result: Dict):
 
         # Always show the optimal portfolio
         show_portfolio = True
-        
+
         # Initialize etf visibility in session state if not present
-        if 'etf_visibility' not in st.session_state:
+        if "etf_visibility" not in st.session_state:
             st.session_state.etf_visibility = {}
-        
+
         show_etfs = {}
-        
+
         # Get ETF list from the normalized data keys
-        available_etfs = [etf for etf in normalized_data.keys() if etf != "Optimal Portfolio"]
-        
+        available_etfs = [
+            etf for etf in normalized_data.keys() if etf != "Optimal Portfolio"
+        ]
+
         # Initialize visibility for new ETFs
         for etf in available_etfs:
             if etf not in st.session_state.etf_visibility:
                 st.session_state.etf_visibility[etf] = True
-        
+
         # Create a checkbox for each ETF
         for i, etf in enumerate(available_etfs):
             col_idx = i % 3
             with cols[col_idx]:
                 # This callback function updates session state when a checkbox is toggled
                 def toggle_etf(etf_name=etf):
-                    st.session_state.etf_visibility[etf_name] = not st.session_state.etf_visibility[etf_name]
-                
+                    st.session_state.etf_visibility[
+                        etf_name
+                    ] = not st.session_state.etf_visibility[etf_name]
+
                 # Create checkbox and read value from session state
                 show_etfs[etf] = st.checkbox(
-                    etf, 
+                    etf,
                     value=st.session_state.etf_visibility[etf],
                     key=f"etf_toggle_{etf}",
                     on_change=toggle_etf,
-                    args=(etf,)
+                    args=(etf,),
                 )
 
         # Create the interactive chart
@@ -743,7 +789,7 @@ def display_portfolio_results(optimization_result: Dict):
                 # First, check the format of the dates to ensure proper conversion
                 if isinstance(plot_data.index[0], str):
                     date_format = None
-                    
+
                     # Try to detect format
                     if "-" in plot_data.index[0]:
                         if plot_data.index[0].count("-") == 2:
@@ -755,20 +801,26 @@ def display_portfolio_results(optimization_result: Dict):
                     elif "/" in plot_data.index[0]:
                         # MM/DD/YYYY format or similar
                         date_format = "%m/%d/%Y"
-                    
+
                     # Convert with appropriate format if detected
                     if date_format:
-                        plot_data.index = pd.to_datetime(plot_data.index, format=date_format, errors='coerce')
+                        plot_data.index = pd.to_datetime(
+                            plot_data.index, format=date_format, errors="coerce"
+                        )
                     else:
                         # Try without specifying format
-                        plot_data.index = pd.to_datetime(plot_data.index, errors='coerce')
+                        plot_data.index = pd.to_datetime(
+                            plot_data.index, errors="coerce"
+                        )
                 else:
                     # General conversion
-                    plot_data.index = pd.to_datetime(plot_data.index, errors='coerce')
-                
+                    plot_data.index = pd.to_datetime(plot_data.index, errors="coerce")
+
                 # If we have any NaT (Not a Time) values, fill them with a valid date
                 if plot_data.index.isnull().any():
-                    st.warning("Some dates could not be parsed correctly. Chart may not display properly.")
+                    st.warning(
+                        "Some dates could not be parsed correctly. Chart may not display properly."
+                    )
             except Exception as e:
                 st.warning(f"Error formatting dates: {str(e)}")
                 # If that fails, keep original index
@@ -803,9 +855,9 @@ def display_portfolio_results(optimization_result: Dict):
             legend_title="ETFs",
             hovermode="x unified",
             xaxis=dict(
-                type='date',
-                tickformat='%Y',  # Format to show years
-                dtick="M12",      # Tick every 12 months
+                type="date",
+                tickformat="%Y",  # Format to show years
+                dtick="M12",  # Tick every 12 months
                 showgrid=True,
                 tickangle=-45,
             ),
@@ -840,7 +892,9 @@ def display_portfolio_results(optimization_result: Dict):
                     else:
                         try:
                             # Try to get days difference from datetime index
-                            if hasattr(series.index[-1], 'days') and hasattr(series.index[0], 'days'):
+                            if hasattr(series.index[-1], "days") and hasattr(
+                                series.index[0], "days"
+                            ):
                                 days = (series.index[-1] - series.index[0]).days
                             else:
                                 # Handle case where index is string dates or integers
@@ -853,7 +907,7 @@ def display_portfolio_results(optimization_result: Dict):
                                     # If conversion fails, estimate based on length of series
                                     # Assume daily data
                                     days = len(series)
-                            
+
                             if days > 0:
                                 annualized_return = (
                                     (1 + total_return / 100) ** (365 / days)
@@ -861,7 +915,9 @@ def display_portfolio_results(optimization_result: Dict):
                             else:
                                 annualized_return = 0
                         except Exception as e:
-                            logger.warning(f"Error calculating annualized return: {str(e)}")
+                            logger.warning(
+                                f"Error calculating annualized return: {str(e)}"
+                            )
                             # Fallback - use simple estimate
                             annualized_return = total_return / 100
 
@@ -878,13 +934,17 @@ def display_portfolio_results(optimization_result: Dict):
                             cummax = cumulative.cummax()
                             try:
                                 # Check if all values in cummax are greater than 0
-                                if cummax.gt(0).all():  # Explicit comparison instead of cummax > 0
+                                if cummax.gt(
+                                    0
+                                ).all():  # Explicit comparison instead of cummax > 0
                                     drawdowns = cumulative / cummax - 1
                                     max_dd = drawdowns.min() * 100
                                 else:
                                     max_dd = 0
                             except Exception as e:
-                                logger.warning(f"Error calculating max drawdown: {str(e)}")
+                                logger.warning(
+                                    f"Error calculating max drawdown: {str(e)}"
+                                )
                                 max_dd = 0
                         else:
                             max_dd = 0
@@ -961,7 +1021,7 @@ def display_portfolio_results(optimization_result: Dict):
                     sharpe_ratio = "N/A"
                     if symbol in metrics and "Sharpe Ratio" in metrics[symbol]:
                         sharpe_ratio = metrics[symbol]["Sharpe Ratio"]
-                    
+
                     # Add to comparison data
                     comparison_data[symbol] = {
                         "Starting Value": f"{start_value:.2f}",
