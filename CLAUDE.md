@@ -21,6 +21,8 @@ Monies is a comprehensive cryptocurrency portfolio management and market analysi
 - Lint code: `./scripts/lint.sh` or `flake8 src/ tests/`
 - Type checking: `mypy src/ tests/`
 - Format code: `./scripts/format.sh` or `black src/ tests/ && isort src/ tests/`
+- Run all quality checks at once: `./scripts/lint.sh && mypy src/ tests/ && black --check src/ tests/ && isort --check src/ tests/`
+- Check for security issues: `bandit -r src/`
 - Install dev dependencies: `pip install -r requirements-dev.txt`
 - Cache market data: `./scripts/cache_data.sh` (optional flags: `--symbols SPY,QQQ,AAPL` `--periods 1mo,3mo,1y` `--cache-hours 48`)
 - Database migrations: `python scripts/migrate_api_keys.py` and `python scripts/migrate_oauth_scopes.py`
@@ -37,18 +39,82 @@ Monies is a comprehensive cryptocurrency portfolio management and market analysi
 - Editor configuration in `.editorconfig`
 - Linting and formatting configuration in `pyproject.toml` and `.flake8`
 
+## Code Quality Configuration
+- **flake8**: Configuration in `.flake8`
+  - Line length: 88 characters (matching black)
+  - Ignored rules: E203, E501, W293, W291, F541, E128, E722
+  - Special exclusions for `__init__.py` and test files
+- **black**: Configuration in `pyproject.toml`
+  - Line length: 88 characters
+  - Target Python version: 3.9+
+- **isort**: Configuration in `pyproject.toml`
+  - Profile: black (for compatibility)
+  - Line length: 88 characters
+- **mypy**: Configuration in `pyproject.toml` and `mypy.ini`
+  - Python version: 3.9
+  - Strict mode with multiple validations enabled
+  - Special exemptions for test files
+- **pytest**: Configuration in `pyproject.toml` and `pytest.ini`
+  - Includes coverage reporting
+- **bandit**: Configuration in `pyproject.toml`
+  - Excludes test directories
+- **pylint**: Basic configuration in `pyproject.toml`
+  - Disabled rules: C0111, R0903, C0103
+  - Max line length: 88 characters
+
 ## Code Style Guidelines
-- **Imports**: Standard library first, third-party next, local modules last
-- **Typing**: Use type hints for function parameters and return values
-- **Naming**: snake_case for variables/functions, CamelCase for classes
-- **Documentation**: Docstrings for all functions, classes, and modules
-- **Error Handling**: Use try/except blocks with specific exceptions
-- **Security**: Never hardcode secrets, use environment variables via python-dotenv
-- **Testing**: Write tests for all new functionality, use pytest fixtures when appropriate
-- **SQLAlchemy**: Use ORM models, proper relationship definitions, session management
-- **Streamlit**: Use st.cache_data or st.cache_resource for expensive operations, organize pages with proper hierarchy
-- **API Clients**: Use proper error handling and rate limiting for external API calls
-- **Code Reviews**: Always run linting and type checking before submitting for review
+- **Code Quality Tools**: ALWAYS run all quality checks before committing code:
+  - **flake8**: For linting (PEP8 compliance, docstring validation)
+  - **black**: For consistent code formatting (88 character line length)
+  - **isort**: For import sorting (standard library → third-party → local)
+  - **mypy**: For static type checking (use strict typing)
+  - **bandit**: For security vulnerability scanning
+  - **pre-commit**: Run all checks automatically before commit
+- **Imports**:
+  - Standard library first, third-party next, local modules last
+  - Always use isort profile=black configuration
+  - Avoid wildcard imports (`from module import *`)
+- **Typing**:
+  - Use type hints for ALL function parameters and return values
+  - Follow mypy strict typing guidelines
+  - Use Optional[] for parameters that can be None
+  - Use Union[] for parameters that can be multiple types
+- **Naming**:
+  - snake_case for variables/functions/modules
+  - CamelCase for classes
+  - UPPER_CASE for constants
+  - Avoid single letter variable names except in list comprehensions
+- **Documentation**:
+  - Docstrings for all functions, classes, and modules (follow Google docstring format)
+  - First line must end with a period (D400 rule)
+  - Include type hints in docstrings that match the function signature
+  - Document all parameters, return values, and exceptions raised
+- **Error Handling**:
+  - Use try/except blocks with specific exceptions
+  - Never use bare except: clauses
+  - Include helpful error messages that guide the user
+- **Security**:
+  - Never hardcode secrets, use environment variables via python-dotenv
+  - Run bandit scans regularly to detect security issues
+  - Validate all user inputs before processing
+- **Testing**:
+  - Write tests for all new functionality
+  - Use pytest fixtures when appropriate
+  - Maintain high code coverage (aim for >90%)
+  - Include both unit and integration tests
+- **SQLAlchemy**:
+  - Use ORM models with proper type annotations
+  - Define proper relationship definitions
+  - Follow session management best practices
+- **Streamlit**:
+  - Use st.cache_data or st.cache_resource for expensive operations
+  - Organize pages with proper hierarchy
+- **API Clients**:
+  - Use proper error handling and rate limiting for external API calls
+  - Implement timeout handling for all network requests
+- **Code Reviews**:
+  - Always run linting and type checking before submitting for review
+  - Address all flake8, mypy, and black issues before requesting review
 
 ## Data Source and Caching Guidelines
 - **ALWAYS** prefer live data from APIs over cached data

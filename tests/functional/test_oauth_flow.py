@@ -1,6 +1,5 @@
 """End-to-end tests for OAuth flow."""
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -71,10 +70,15 @@ def mock_streamlit():
         "state": ["test-oauth-state"],
     }
 
-    with patch("app.st", mock_st):
-        with patch("src.utils.auth.st", mock_st):
-            with patch("src.pages.settings.st", mock_st):
-                yield mock_st
+    with patch("streamlit.query_params", mock_st.query_params):
+        with patch("streamlit.session_state", mock_st.session_state):
+            with patch("streamlit.markdown", mock_st.markdown):
+                with patch("streamlit.stop", mock_st.stop):
+                    with patch("streamlit.error", mock_st.error):
+                        with patch("app.st", mock_st):
+                            with patch("src.utils.auth.st", mock_st):
+                                with patch("src.pages.settings.st", mock_st):
+                                    yield mock_st
 
 
 # Test complete OAuth login flow
@@ -128,6 +132,19 @@ def test_oauth_login_flow(
     oauth_config_module.exchange_code_for_token = mock_exchange_code
     oauth_config_module.get_user_info = mock_get_user_info
     oauth_config_module.create_or_update_oauth_user = mock_create_user
+
+    # Mock the OAuth_CONFIGS import as well that our updated code uses
+    oauth_config_module.OAUTH_CONFIGS = {
+        "google": {
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+            "display_name": "Google",
+            "color": "#DB4437",
+        }
+    }
+    oauth_config_module.generate_oauth_authorize_url = MagicMock(
+        return_value=("https://accounts.google.com/oauth", "test-state")
+    )
 
     # Mock the dynamic import
     with patch.dict("sys.modules", {"src.utils.oauth_config": oauth_config_module}):
@@ -222,6 +239,19 @@ def test_oauth_api_connection_flow(
         return_value={"coinbase": True}
     )
 
+    # Mock the OAuth_CONFIGS import as well that our updated code uses
+    oauth_config_module.OAUTH_CONFIGS = {
+        "coinbase": {
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+            "display_name": "Coinbase",
+            "color": "#0052FF",
+        }
+    }
+    oauth_config_module.generate_oauth_authorize_url = MagicMock(
+        return_value=("https://www.coinbase.com/oauth/authorize", "test-state")
+    )
+
     # Mock the dynamic import
     with patch.dict("sys.modules", {"src.utils.oauth_config": oauth_config_module}):
         # Call the OAuth callback handler
@@ -271,6 +301,19 @@ def test_oauth_flow_error_handling(
     # Need to patch the import itself
     oauth_config_module = MagicMock()
     oauth_config_module.exchange_code_for_token = mock_exchange_code
+
+    # Mock the OAuth_CONFIGS import as well that our updated code uses
+    oauth_config_module.OAUTH_CONFIGS = {
+        "google": {
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+            "display_name": "Google",
+            "color": "#DB4437",
+        }
+    }
+    oauth_config_module.generate_oauth_authorize_url = MagicMock(
+        return_value=("https://accounts.google.com/oauth", "test-state")
+    )
 
     # Mock the dynamic import
     with patch.dict("sys.modules", {"src.utils.oauth_config": oauth_config_module}):
